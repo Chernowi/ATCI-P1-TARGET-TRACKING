@@ -7,6 +7,7 @@ Project: AIforUTracking / Refactoring Exercise
 
 import numpy as np
 import random
+import torch
 from typing import List, Optional
 from world_objects import Location, Velocity
 
@@ -24,7 +25,8 @@ class ParticleFilterCore:
                  state_dimension: int = 4, # [x, vx, y, vy]
                  num_particles: int = 6000,
                  estimation_method: str = 'range', # 'range' or 'area'
-                 max_particle_range: float = 250.0):
+                 max_particle_range: float = 250.0,
+                 device: str = None):
         """
         Initializes the core particle filter components.
 
@@ -35,10 +37,15 @@ class ParticleFilterCore:
             num_particles: Number of particles to use.
             estimation_method: Method for likelihood calculation ('range' or 'area').
             max_particle_range: Maximum range used in 'area' method or for initial spread.
+            device: Device to use for tensor operations ('cuda', 'cuda:0', 'cpu', etc).
+                   If None, automatically selects CUDA if available, otherwise CPU.
         """
         if state_dimension != 4:
             raise ValueError("State dimension must be 4 ([x, vx, y, vy]) for current implementation.")
 
+        # Set device for PyTorch tensors
+        self.device = device if device is not None else ('cuda' if torch.cuda.is_available() else 'cpu')
+        
         self.initial_range_stddev = initial_range_stddev
         self.initial_velocity_guess = initial_velocity_guess
         self.num_particles = num_particles
@@ -47,11 +54,11 @@ class ParticleFilterCore:
         self.max_particle_range = max_particle_range # Used in 'area' method and init
 
         # Particle states: rows are particles, columns are [x, vx, y, vy]
-        self.particles_state = np.zeros((self.num_particles, self.state_dimension))
-        self.previous_particles_state = np.zeros((self.num_particles, self.state_dimension))
+        self.particles_state = torch.zeros((self.num_particles, self.state_dimension), device=self.device)
+        self.previous_particles_state = torch.zeros((self.num_particles, self.state_dimension), device=self.device)
 
         # Particle weights
-        self.weights = np.ones(self.num_particles) / self.num_particles # Initialize normalized
+        self.weights = torch.ones(self.num_particles, device=self.device) / self.num_particles # Initialize normalized
 
         # Noise parameters (can be set later via set_noise)
         self.process_noise_position = 0.0 # Corresponds to former forward_noise
@@ -64,8 +71,8 @@ class ParticleFilterCore:
         self.estimated_velocity: Optional[Velocity] = None
 
         # Covariance of the estimated position
-        self.position_covariance_matrix = np.eye(2) # Initialize to identity
-        self.position_covariance_eigenvalues = np.array([0.02, 0.02]) # For ellipse drawing?
+        self.position_covariance_matrix = torch.eye(2, device=self.device) # Initialize to identity
+        self.position_covariance_eigenvalues = torch.tensor([0.02, 0.02], device=self.device) # For ellipse drawing
         self.position_covariance_orientation = 0.0 # Angle of major axis
 
         # Flag for initialization state
