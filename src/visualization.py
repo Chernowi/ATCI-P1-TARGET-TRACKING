@@ -13,6 +13,7 @@ from configs import VisualizationConfig
 _agent_trajectory = []
 _landmark_trajectory = []
 
+
 def visualize_world(world, vis_config: VisualizationConfig, filename=None, show_trajectories=True, collect_for_gif=True):
     """
     Visualize the world state in 2D (top-down view) and save it to a file.
@@ -31,9 +32,11 @@ def visualize_world(world, vis_config: VisualizationConfig, filename=None, show_
     max_trajectory_points = vis_config.max_trajectory_points
 
     if world.agent and world.agent.location:
-        _agent_trajectory.append((world.agent.location.x, world.agent.location.y))
+        _agent_trajectory.append(
+            (world.agent.location.x, world.agent.location.y))
     if world.true_landmark and world.true_landmark.location:
-        _landmark_trajectory.append((world.true_landmark.location.x, world.true_landmark.location.y))
+        _landmark_trajectory.append(
+            (world.true_landmark.location.x, world.true_landmark.location.y))
 
     if len(_agent_trajectory) > max_trajectory_points:
         _agent_trajectory = _agent_trajectory[-max_trajectory_points:]
@@ -52,19 +55,21 @@ def visualize_world(world, vis_config: VisualizationConfig, filename=None, show_
 
     if show_trajectories and len(_agent_trajectory) > 1:
         agent_traj_x, agent_traj_y = zip(*_agent_trajectory)
-        ax.plot(agent_traj_x, agent_traj_y, 'b-', linewidth=1.5, alpha=0.6, label='Agent Traj.')
+        ax.plot(agent_traj_x, agent_traj_y, 'b-',
+                linewidth=1.5, alpha=0.6, label='Agent Traj.')
 
     if show_trajectories and len(_landmark_trajectory) > 1:
         landmark_traj_x, landmark_traj_y = zip(*_landmark_trajectory)
-        ax.plot(landmark_traj_x, landmark_traj_y, 'r-', linewidth=1.5, alpha=0.6, label='Landmark Traj.')
+        ax.plot(landmark_traj_x, landmark_traj_y, 'r-',
+                linewidth=1.5, alpha=0.6, label='Landmark Traj.')
 
     if world.agent and world.agent.location:
         ax.scatter(world.agent.location.x, world.agent.location.y,
-                  color='blue', marker='o', s=100, label=f'Agent (Z:{world.agent.location.depth:.1f})')
+                   color='blue', marker='o', s=100, label=f'Agent (Z:{world.agent.location.depth:.1f})')
 
     if world.true_landmark and world.true_landmark.location:
         ax.scatter(world.true_landmark.location.x, world.true_landmark.location.y,
-                  color='red', marker='^', s=100, label=f'True Lmk (Z:{world.true_landmark.location.depth:.1f})')
+                   color='red', marker='^', s=100, label=f'True Lmk (Z:{world.true_landmark.location.depth:.1f})')
         if world.agent and world.agent.location:
             ax.plot([world.agent.location.x, world.true_landmark.location.x],
                     [world.agent.location.y, world.true_landmark.location.y],
@@ -73,7 +78,7 @@ def visualize_world(world, vis_config: VisualizationConfig, filename=None, show_
     if world.estimated_landmark and world.estimated_landmark.estimated_location is not None:
         est_loc = world.estimated_landmark.estimated_location
         ax.scatter(est_loc.x, est_loc.y,
-                  color='green', marker='x', s=100, label=f'Est. Lmk (Z:{est_loc.depth:.1f})')
+                   color='green', marker='x', s=100, label=f'Est. Lmk (Z:{est_loc.depth:.1f})')
 
         if world.agent and world.agent.location:
             ax.plot([world.agent.location.x, est_loc.x],
@@ -82,8 +87,9 @@ def visualize_world(world, vis_config: VisualizationConfig, filename=None, show_
 
         pf_core = world.estimated_landmark.pf_core
         if pf_core and pf_core.particles_state is not None and pf_core.num_particles < 500:
-             particles = pf_core.particles_state
-             ax.scatter(particles[:, 0], particles[:, 2], color='gray', marker='.', s=1, alpha=0.3, label='Particles')
+            particles = pf_core.particles_state
+            ax.scatter(particles[:, 0], particles[:, 2], color='gray',
+                       marker='.', s=1, alpha=0.3, label='Particles')
 
         if hasattr(pf_core, 'position_covariance_matrix') and pf_core.position_covariance_eigenvalues is not None:
             try:
@@ -100,8 +106,9 @@ def visualize_world(world, vis_config: VisualizationConfig, filename=None, show_
             except Exception as e:
                 print(f"Warning: Could not plot covariance ellipse - {e}")
     else:
-         if world.agent and world.agent.location:
-             ax.text(0.5, 0.02, "PF not initialized", ha='center', transform=ax.transAxes, color='orange', fontsize=10)
+        if world.agent and world.agent.location:
+            ax.text(0.5, 0.02, "PF not initialized", ha='center',
+                    transform=ax.transAxes, color='orange', fontsize=10)
 
     ax.set_xlabel('X')
     ax.set_ylabel('Y')
@@ -110,9 +117,9 @@ def visualize_world(world, vis_config: VisualizationConfig, filename=None, show_
         try:
             step_part = filename.split('_')[-1].split('.')[0]
             if step_part.isdigit():
-                 title_info = f"Step: {int(step_part)}, " + title_info
+                title_info = f"Step: {int(step_part)}, " + title_info
             elif "initial" in filename:
-                 title_info = "Step: 0, " + title_info
+                title_info = "Step: 0, " + title_info
         except IndexError:
             pass
 
@@ -136,9 +143,9 @@ def visualize_world(world, vis_config: VisualizationConfig, filename=None, show_
             points_x.extend(traj_x)
             points_y.extend(traj_y)
         if _landmark_trajectory:
-             traj_x, traj_y = zip(*_landmark_trajectory)
-             points_x.extend(traj_x)
-             points_y.extend(traj_y)
+            traj_x, traj_y = zip(*_landmark_trajectory)
+            points_x.extend(traj_x)
+            points_y.extend(traj_y)
 
     if not points_x or not points_y:
         min_x, max_x, min_y, max_y = -10, 10, -10, 10
@@ -153,8 +160,10 @@ def visualize_world(world, vis_config: VisualizationConfig, filename=None, show_
     max_range = max(range_x, range_y, 20.0)
     padding = max_range * 0.2
 
-    ax.set_xlim(center_x - (max_range / 2 + padding), center_x + (max_range / 2 + padding))
-    ax.set_ylim(center_y - (max_range / 2 + padding), center_y + (max_range / 2 + padding))
+    ax.set_xlim(center_x - (max_range / 2 + padding),
+                center_x + (max_range / 2 + padding))
+    ax.set_ylim(center_y - (max_range / 2 + padding),
+                center_y + (max_range / 2 + padding))
 
     ax.set_aspect('equal', adjustable='box')
     ax.legend(fontsize='small', loc='upper left', bbox_to_anchor=(1.02, 1.0))
@@ -208,13 +217,13 @@ def save_gif(output_filename: str, vis_config: VisualizationConfig, frame_paths:
         images = []
         for frame_path in frame_paths:
             if os.path.exists(frame_path):
-                 images.append(imageio.imread(frame_path))
+                images.append(imageio.imread(frame_path))
             else:
-                 print(f"Warning: Frame file not found: {frame_path}")
+                print(f"Warning: Frame file not found: {frame_path}")
 
         if not images:
-             print("Error: No valid image frames found to create GIF.")
-             return None
+            print("Error: No valid image frames found to create GIF.")
+            return None
 
         imageio.mimsave(output_path, images, duration=duration)
         print(f"GIF saved successfully.")
@@ -227,8 +236,10 @@ def save_gif(output_filename: str, vis_config: VisualizationConfig, frame_paths:
                         os.remove(frame_path)
                         deleted_count += 1
                 except OSError as e:
-                    print(f"Warning: Could not delete frame file {frame_path}: {e}")
-            if deleted_count > 0: print(f"Deleted {deleted_count} individual frame files.")
+                    print(
+                        f"Warning: Could not delete frame file {frame_path}: {e}")
+            if deleted_count > 0:
+                print(f"Deleted {deleted_count} individual frame files.")
 
         return output_path
 
@@ -270,7 +281,7 @@ if __name__ == "__main__":
     print("Running visualization example...")
     from configs import default_config
     world_cfg = default_config.world
-    pf_cfg = default_config.particle_filter # World needs pf_config now
+    pf_cfg = default_config.particle_filter  # World needs pf_config now
     vis_cfg = default_config.visualization
 
     # World constructor now expects world_config and pf_config
@@ -280,23 +291,27 @@ if __name__ == "__main__":
     example_frames = []
 
     print("Visualizing initial state...")
-    initial_file = visualize_world(world, vis_config=vis_cfg, filename="example_frame_000.png")
-    if initial_file: example_frames.append(initial_file)
+    initial_file = visualize_world(
+        world, vis_config=vis_cfg, filename="example_frame_000.png")
+    if initial_file:
+        example_frames.append(initial_file)
 
     print("Simulating 10 steps...")
     for i in range(10):
         action = Velocity(0.5, 0.5, 0)
         if world.true_landmark and world.agent:
-             dx = world.true_landmark.location.x - world.agent.location.x
-             dy = world.true_landmark.location.y - world.agent.location.y
-             dist = max(1e-6, (dx**2 + dy**2)**0.5)
-             step_speed = 1.0
-             action = Velocity(dx/dist * step_speed, dy/dist * step_speed, 0)
+            dx = world.true_landmark.location.x - world.agent.location.x
+            dy = world.true_landmark.location.y - world.agent.location.y
+            dist = max(1e-6, (dx**2 + dy**2)**0.5)
+            step_speed = 1.0
+            action = Velocity(dx/dist * step_speed, dy/dist * step_speed, 0)
 
         world.step(action, training=False)
 
-        step_file = visualize_world(world, vis_config=vis_cfg, filename=f"example_frame_{i+1:03d}.png")
-        if step_file: example_frames.append(step_file)
+        step_file = visualize_world(
+            world, vis_config=vis_cfg, filename=f"example_frame_{i+1:03d}.png")
+        if step_file:
+            example_frames.append(step_file)
 
     print("Creating example GIF...")
     gif_path = save_gif(
@@ -304,7 +319,7 @@ if __name__ == "__main__":
         vis_config=vis_cfg,
         frame_paths=example_frames,
         delete_frames=vis_cfg.delete_frames_after_gif
-        )
+    )
 
     if gif_path:
         print(f"Visualization example complete. GIF saved to: {gif_path}")

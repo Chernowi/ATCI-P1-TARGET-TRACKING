@@ -104,7 +104,7 @@ class Critic(nn.Module):
 
     def forward(self, state, action):
         """Forward pass returning both Q-values."""
-        sa = torch.cat([state, action], 1) # Concatenate state and action
+        sa = torch.cat([state, action], 1)  # Concatenate state and action
 
         # Q1 path
         x1 = F.relu(self.fc1(sa))
@@ -140,7 +140,8 @@ class SAC:
         self.auto_tune_alpha = config.auto_tune_alpha
 
         if device is None:
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            self.device = torch.device(
+                "cuda" if torch.cuda.is_available() else "cpu")
         else:
             self.device = device
         print(f"SAC Agent using device: {self.device}")
@@ -152,14 +153,19 @@ class SAC:
         # Initialize target critic weights to match critic weights
         for target_param, param in zip(self.critic_target.parameters(), self.critic.parameters()):
             target_param.data.copy_(param.data)
-            target_param.requires_grad = False # Target networks are not trained directly
+            target_param.requires_grad = False  # Target networks are not trained directly
 
-        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=config.lr)
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=config.lr)
+        self.actor_optimizer = optim.Adam(
+            self.actor.parameters(), lr=config.lr)
+        self.critic_optimizer = optim.Adam(
+            self.critic.parameters(), lr=config.lr)
 
         if self.auto_tune_alpha:
-            self.target_entropy = -torch.prod(torch.Tensor([config.action_dim]).to(self.device)).item()
-            self.log_alpha = torch.zeros(1, requires_grad=True, device=self.device)
+            self.target_entropy = - \
+                torch.prod(torch.Tensor(
+                    [config.action_dim]).to(self.device)).item()
+            self.log_alpha = torch.zeros(
+                1, requires_grad=True, device=self.device)
             self.alpha_optimizer = optim.Adam([self.log_alpha], lr=config.lr)
 
     def select_action(self, state, evaluate=False):
@@ -168,10 +174,13 @@ class SAC:
         with torch.no_grad():
             if evaluate:
                 _, _, action_mean_squashed = self.actor.sample(state)
-                action_normalized = action_mean_squashed # Use deterministic mean for evaluation
+                # Use deterministic mean for evaluation
+                action_normalized = action_mean_squashed
             else:
-                action_normalized, _, _ = self.actor.sample(state) # Sample stochastically for training
-        action_scaled = action_normalized.detach().cpu().numpy()[0] * self.action_scale
+                action_normalized, _, _ = self.actor.sample(
+                    state)  # Sample stochastically for training
+        action_scaled = action_normalized.detach().cpu().numpy()[
+            0] * self.action_scale
         return action_scaled
 
     def update_parameters(self, memory: ReplayBuffer, batch_size: int):
@@ -179,24 +188,31 @@ class SAC:
         if len(memory) < batch_size:
             return None
 
-        state_batch, action_batch_scaled, reward_batch, next_state_batch, done_batch = memory.sample(batch_size)
+        state_batch, action_batch_scaled, reward_batch, next_state_batch, done_batch = memory.sample(
+            batch_size)
 
         state_batch = torch.FloatTensor(state_batch).to(self.device)
         # Rescale actions back to [-1, 1] for network input
-        action_batch_normalized = torch.FloatTensor(action_batch_scaled / self.action_scale).to(self.device)
-        reward_batch = torch.FloatTensor(reward_batch).to(self.device).unsqueeze(1)
+        action_batch_normalized = torch.FloatTensor(
+            action_batch_scaled / self.action_scale).to(self.device)
+        reward_batch = torch.FloatTensor(
+            reward_batch).to(self.device).unsqueeze(1)
         next_state_batch = torch.FloatTensor(next_state_batch).to(self.device)
         done_batch = torch.FloatTensor(done_batch).to(self.device).unsqueeze(1)
 
         # --- Critic Update ---
         with torch.no_grad():
-            next_action_normalized, next_log_prob, _ = self.actor.sample(next_state_batch)
-            target_q1, target_q2 = self.critic_target(next_state_batch, next_action_normalized)
+            next_action_normalized, next_log_prob, _ = self.actor.sample(
+                next_state_batch)
+            target_q1, target_q2 = self.critic_target(
+                next_state_batch, next_action_normalized)
             target_q_min = torch.min(target_q1, target_q2)
             target_q_entropy = target_q_min - self.alpha * next_log_prob
-            y = reward_batch + (1 - done_batch) * self.gamma * target_q_entropy # Bellman target
+            y = reward_batch + (1 - done_batch) * self.gamma * \
+                target_q_entropy  # Bellman target
 
-        current_q1, current_q2 = self.critic(state_batch, action_batch_normalized)
+        current_q1, current_q2 = self.critic(
+            state_batch, action_batch_normalized)
         critic_loss = F.mse_loss(current_q1, y) + F.mse_loss(current_q2, y)
 
         self.critic_optimizer.zero_grad()
@@ -205,7 +221,7 @@ class SAC:
 
         # --- Actor Update ---
         for param in self.critic.parameters():
-            param.requires_grad = False # Freeze critic during actor update
+            param.requires_grad = False  # Freeze critic during actor update
 
         action_pi_normalized, log_prob_pi, _ = self.actor.sample(state_batch)
         q1_pi, q2_pi = self.critic(state_batch, action_pi_normalized)
@@ -217,11 +233,12 @@ class SAC:
         self.actor_optimizer.step()
 
         for param in self.critic.parameters():
-            param.requires_grad = True # Unfreeze critic
+            param.requires_grad = True  # Unfreeze critic
 
         # --- Alpha Update (Entropy Tuning) ---
         if self.auto_tune_alpha:
-            alpha_loss = -(self.log_alpha * (log_prob_pi + self.target_entropy).detach()).mean()
+            alpha_loss = -(self.log_alpha * (log_prob_pi +
+                           self.target_entropy).detach()).mean()
             self.alpha_optimizer.zero_grad()
             alpha_loss.backward()
             self.alpha_optimizer.step()
@@ -229,7 +246,8 @@ class SAC:
 
         # --- Target Network Update ---
         for target_param, param in zip(self.critic_target.parameters(), self.critic.parameters()):
-            target_param.data.copy_(target_param.data * (1.0 - self.tau) + param.data * self.tau)
+            target_param.data.copy_(
+                target_param.data * (1.0 - self.tau) + param.data * self.tau)
 
         return {
             'critic_loss': critic_loss.item(),
@@ -249,27 +267,32 @@ class SAC:
             'device_type': self.device.type
         }
         if self.auto_tune_alpha:
-             save_dict['log_alpha_state_dict'] = self.log_alpha
-             save_dict['alpha_optimizer_state_dict'] = self.alpha_optimizer.state_dict()
+            save_dict['log_alpha_state_dict'] = self.log_alpha
+            save_dict['alpha_optimizer_state_dict'] = self.alpha_optimizer.state_dict()
         torch.save(save_dict, path)
 
     def load_model(self, path: str):
         """Load model and optimizer states."""
         if not os.path.exists(path):
-             print(f"Warning: Model file not found at {path}. Skipping loading.")
-             return
+            print(
+                f"Warning: Model file not found at {path}. Skipping loading.")
+            return
         print(f"Loading model from {path}...")
         checkpoint = torch.load(path, map_location=self.device)
 
         self.actor.load_state_dict(checkpoint['actor_state_dict'])
         self.critic.load_state_dict(checkpoint['critic_state_dict'])
-        self.critic_target.load_state_dict(checkpoint['critic_target_state_dict'])
-        self.actor_optimizer.load_state_dict(checkpoint['actor_optimizer_state_dict'])
-        self.critic_optimizer.load_state_dict(checkpoint['critic_optimizer_state_dict'])
+        self.critic_target.load_state_dict(
+            checkpoint['critic_target_state_dict'])
+        self.actor_optimizer.load_state_dict(
+            checkpoint['actor_optimizer_state_dict'])
+        self.critic_optimizer.load_state_dict(
+            checkpoint['critic_optimizer_state_dict'])
 
         if self.auto_tune_alpha and 'log_alpha_state_dict' in checkpoint:
             self.log_alpha = checkpoint['log_alpha_state_dict'].to(self.device)
-            self.alpha_optimizer.load_state_dict(checkpoint['alpha_optimizer_state_dict'])
+            self.alpha_optimizer.load_state_dict(
+                checkpoint['alpha_optimizer_state_dict'])
             self.alpha = self.log_alpha.exp().item()
 
         # Ensure target weights are updated after loading
@@ -285,11 +308,12 @@ def train_sac(config: DefaultConfig, use_multi_gpu: bool = False):
     train_config = config.training
     buffer_config = config.replay_buffer
     world_config = config.world
-    pf_config = config.particle_filter # Needed for World initialization
+    pf_config = config.particle_filter  # Needed for World initialization
 
     if torch.cuda.is_available():
         if use_multi_gpu and torch.cuda.device_count() > 1:
-            print(f"Using {torch.cuda.device_count()} GPUs for training (Note: SAC updates are often sequential)")
+            print(
+                f"Using {torch.cuda.device_count()} GPUs for training (Note: SAC updates are often sequential)")
             device = torch.device("cuda")
         else:
             device = torch.device("cuda:0")
@@ -305,7 +329,8 @@ def train_sac(config: DefaultConfig, use_multi_gpu: bool = False):
 
     episode_rewards = []
     all_losses = {'critic_loss': [], 'actor_loss': [], 'alpha': []}
-    pbar = tqdm(range(1, train_config.num_episodes + 1), desc="Training", unit="episode")
+    pbar = tqdm(range(1, train_config.num_episodes + 1),
+                desc="Training", unit="episode")
 
     for episode in pbar:
         # World requires both world_config and pf_config
@@ -317,12 +342,14 @@ def train_sac(config: DefaultConfig, use_multi_gpu: bool = False):
 
         for step in range(train_config.max_steps):
             action_scaled = agent.select_action(state, evaluate=False)
-            action_obj = Velocity(x=action_scaled[0], y=action_scaled[1], z=0.0)
+            action_obj = Velocity(
+                x=action_scaled[0], y=action_scaled[1], z=0.0)
             env.step(action_obj, training=True)
             reward = env.reward
             next_state = env.encode_state()
             done = env.done
-            episode_transitions.append((state, action_scaled, reward, next_state, done))
+            episode_transitions.append(
+                (state, action_scaled, reward, next_state, done))
             state = next_state
             episode_reward += reward
             episode_steps += 1
@@ -337,17 +364,20 @@ def train_sac(config: DefaultConfig, use_multi_gpu: bool = False):
         update_count = 0
         if len(memory) >= train_config.batch_size:
             for _ in range(num_updates):
-                 losses = agent.update_parameters(memory, train_config.batch_size)
-                 if losses:
-                     episode_avg_losses['critic_loss'] += losses['critic_loss']
-                     episode_avg_losses['actor_loss'] += losses['actor_loss']
-                     episode_avg_losses['alpha'] = losses['alpha']
-                     update_count += 1
+                losses = agent.update_parameters(
+                    memory, train_config.batch_size)
+                if losses:
+                    episode_avg_losses['critic_loss'] += losses['critic_loss']
+                    episode_avg_losses['actor_loss'] += losses['actor_loss']
+                    episode_avg_losses['alpha'] = losses['alpha']
+                    update_count += 1
             if update_count > 0:
                 episode_avg_losses['critic_loss'] /= update_count
                 episode_avg_losses['actor_loss'] /= update_count
-                all_losses['critic_loss'].append(episode_avg_losses['critic_loss'])
-                all_losses['actor_loss'].append(episode_avg_losses['actor_loss'])
+                all_losses['critic_loss'].append(
+                    episode_avg_losses['critic_loss'])
+                all_losses['actor_loss'].append(
+                    episode_avg_losses['actor_loss'])
                 all_losses['alpha'].append(episode_avg_losses['alpha'])
 
         episode_rewards.append(episode_reward)
@@ -363,7 +393,8 @@ def train_sac(config: DefaultConfig, use_multi_gpu: bool = False):
             pbar.set_postfix(pbar_postfix)
 
         if episode % train_config.save_interval == 0:
-            save_path = os.path.join(train_config.models_dir, f"sac_ep{episode}.pt")
+            save_path = os.path.join(
+                train_config.models_dir, f"sac_ep{episode}.pt")
             agent.save_model(save_path)
 
     pbar.close()
@@ -375,7 +406,7 @@ def evaluate_sac(agent: SAC, config: DefaultConfig):
     eval_config = config.evaluation
     world_config = config.world
     vis_config = config.visualization
-    pf_config = config.particle_filter # Needed for World initialization
+    pf_config = config.particle_filter  # Needed for World initialization
 
     eval_rewards = []
     success_count = 0
@@ -399,13 +430,15 @@ def evaluate_sac(agent: SAC, config: DefaultConfig):
                 world=env,
                 vis_config=vis_config,
                 filename=f"eval_ep{episode+1}_frame_000_initial.png",
-                collect_for_gif=True # This flag might be redundant if frame list is managed here
+                collect_for_gif=True  # This flag might be redundant if frame list is managed here
             )
-            if initial_frame_file: episode_frames.append(initial_frame_file)
+            if initial_frame_file:
+                episode_frames.append(initial_frame_file)
 
         for step in range(eval_config.max_steps):
             action_scaled = agent.select_action(state, evaluate=True)
-            action_obj = Velocity(x=action_scaled[0], y=action_scaled[1], z=0.0)
+            action_obj = Velocity(
+                x=action_scaled[0], y=action_scaled[1], z=0.0)
             env.step(action_obj, training=False)
             reward = env.reward
             next_state = env.encode_state()
@@ -416,20 +449,23 @@ def evaluate_sac(agent: SAC, config: DefaultConfig):
                     world=env,
                     vis_config=vis_config,
                     filename=f"eval_ep{episode+1}_frame_{step+1:03d}.png",
-                    collect_for_gif=True # This flag might be redundant
+                    collect_for_gif=True  # This flag might be redundant
                 )
-                if frame_file: episode_frames.append(frame_file)
+                if frame_file:
+                    episode_frames.append(frame_file)
 
             state = next_state
             episode_reward += reward
 
             if done:
                 success_count += 1
-                print(f"  Episode {episode+1}: Success! Found landmark at step {step+1} (Error: {env.error_dist:.2f} < threshold {world_config.success_threshold})")
+                print(
+                    f"  Episode {episode+1}: Success! Found landmark at step {step+1} (Error: {env.error_dist:.2f} < threshold {world_config.success_threshold})")
                 break
 
         if not done:
-             print(f"  Episode {episode+1}: Finished (Max steps {eval_config.max_steps} reached). Final Error: {env.error_dist:.2f}")
+            print(
+                f"  Episode {episode+1}: Finished (Max steps {eval_config.max_steps} reached). Final Error: {env.error_dist:.2f}")
 
         eval_rewards.append(episode_reward)
         print(f"  Episode {episode+1}: Total Reward: {episode_reward:.2f}")
@@ -450,15 +486,19 @@ def evaluate_sac(agent: SAC, config: DefaultConfig):
 
     if eval_config.render and len(all_episode_gif_paths) > 1:
         # Skipping combined GIF creation from other GIFs as it's complex/lossy
-        print(f"\nCombined GIF creation skipped. View individual episode GIFs: {all_episode_gif_paths}")
+        print(
+            f"\nCombined GIF creation skipped. View individual episode GIFs: {all_episode_gif_paths}")
 
     avg_eval_reward = np.mean(eval_rewards) if eval_rewards else 0
-    success_rate = success_count / eval_config.num_episodes if eval_config.num_episodes > 0 else 0
+    success_rate = success_count / \
+        eval_config.num_episodes if eval_config.num_episodes > 0 else 0
     print(f"\n--- Evaluation Summary ---")
     print(f"Average Evaluation Reward: {avg_eval_reward:.2f}")
-    print(f"Success Rate: {success_rate:.2f} ({success_count}/{eval_config.num_episodes})")
+    print(
+        f"Success Rate: {success_rate:.2f} ({success_count}/{eval_config.num_episodes})")
     if eval_config.render:
-        print(f"Individual episode GIFs saved in the '{os.path.abspath(vis_config.save_dir)}' directory.")
+        print(
+            f"Individual episode GIFs saved in the '{os.path.abspath(vis_config.save_dir)}' directory.")
     print(f"--- End Evaluation ---")
 
     return eval_rewards

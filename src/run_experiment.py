@@ -5,6 +5,7 @@ from world import World
 from configs import CONFIGS, DefaultConfig
 from visualization import reset_trajectories
 
+
 def run_experiment(config_name: str, model_path: str, num_episodes: int, max_steps: int, render: bool):
     """
     Load a trained SAC model and run an experiment using specified configuration.
@@ -17,7 +18,8 @@ def run_experiment(config_name: str, model_path: str, num_episodes: int, max_ste
         render: Whether to render the environment and save GIFs.
     """
     if config_name not in CONFIGS:
-        raise ValueError(f"Unknown configuration name: {config_name}. Available: {list(CONFIGS.keys())}")
+        raise ValueError(
+            f"Unknown configuration name: {config_name}. Available: {list(CONFIGS.keys())}")
 
     config: DefaultConfig = CONFIGS[config_name]
     print(f"Using configuration: '{config_name}' for experiment")
@@ -42,10 +44,13 @@ def run_experiment(config_name: str, model_path: str, num_episodes: int, max_ste
     print(f"\nRunning experiment with model {os.path.basename(model_path)}...")
     evaluate_sac(agent=agent, config=config)
 
-    print(f"\nExperiment complete. Visualizations saved to {config.visualization.save_dir} directory.")
+    print(
+        f"\nExperiment complete. Visualizations saved to {config.visualization.save_dir} directory.")
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run an experiment with a trained SAC model")
+    parser = argparse.ArgumentParser(
+        description="Run an experiment with a trained SAC model")
     parser.add_argument(
         "--config", "-c", type=str, default="default",
         help=f"Configuration name to use. Available: {list(CONFIGS.keys())}"
@@ -75,9 +80,9 @@ if __name__ == "__main__":
 
     # Check if default model path used and directory needs creation
     if args.model == "sac_models/sac_final.pt" and not os.path.exists(os.path.dirname(args.model)):
-         os.makedirs(os.path.dirname(args.model))
-         print(f"Created directory: {os.path.dirname(args.model)}")
-         print("Warning: Default model path specified, but directory didn't exist. Ensure sac_final.pt is present or specify a valid model path.")
+        os.makedirs(os.path.dirname(args.model))
+        print(f"Created directory: {os.path.dirname(args.model)}")
+        print("Warning: Default model path specified, but directory didn't exist. Ensure sac_final.pt is present or specify a valid model path.")
 
     run_experiment(
         config_name=args.config,

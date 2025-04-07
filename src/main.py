@@ -6,10 +6,12 @@ from SAC import train_sac, evaluate_sac
 from world import World
 from configs import CONFIGS, DefaultConfig
 
+
 def main(config_name: str):
     """Main function to train and evaluate the SAC agent."""
     if config_name not in CONFIGS:
-        raise ValueError(f"Unknown configuration name: {config_name}. Available: {list(CONFIGS.keys())}")
+        raise ValueError(
+            f"Unknown configuration name: {config_name}. Available: {list(CONFIGS.keys())}")
 
     config: DefaultConfig = CONFIGS[config_name]
     print(f"Using configuration: '{config_name}'")
@@ -28,11 +30,14 @@ def main(config_name: str):
     print("\nEvaluating SAC agent...")
     evaluate_sac(agent=agent, config=config)
 
-    print(f"\nTraining and evaluation complete. Find output in the {config.visualization.save_dir} directory.")
+    print(
+        f"\nTraining and evaluation complete. Find output in the {config.visualization.save_dir} directory.")
     print("You can convert the frames to a video using ffmpeg or view the generated GIFs.")
 
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train and evaluate SAC agent for landmark tracking.")
+    parser = argparse.ArgumentParser(
+        description="Train and evaluate SAC agent for landmark tracking.")
     parser.add_argument(
         "--config", "-c", type=str, default="default",
         help=f"Configuration name to use. Available: {list(CONFIGS.keys())}"

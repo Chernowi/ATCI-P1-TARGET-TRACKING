@@ -16,6 +16,7 @@ SOUND_SPEED = 1500.0
 
 # --- Particle Filter Core Logic ---
 
+
 class ParticleFilterCore:
     """ Core implementation of the Particle Filter algorithm. """
 
@@ -26,7 +27,7 @@ class ParticleFilterCore:
         Args:
             config: Configuration object for the particle filter.
         """
-        self.state_dimension = 4 # [x, vx, y, vy]
+        self.state_dimension = 4  # [x, vx, y, vy]
 
         self.config = config
 
@@ -39,8 +40,10 @@ class ParticleFilterCore:
         self.process_noise_velocity = config.process_noise_vel
         self.measurement_noise_stddev = config.measurement_noise_stddev
 
-        self.particles_state = np.zeros((self.num_particles, self.state_dimension))
-        self.previous_particles_state = np.zeros((self.num_particles, self.state_dimension))
+        self.particles_state = np.zeros(
+            (self.num_particles, self.state_dimension))
+        self.previous_particles_state = np.zeros(
+            (self.num_particles, self.state_dimension))
 
         self.weights = np.ones(self.num_particles) / self.num_particles
 
@@ -69,17 +72,24 @@ class ParticleFilterCore:
             angle = random.uniform(0, 2 * np.pi)
 
             if self.estimation_method == 'area':
-                radius = random.uniform(-self.max_particle_range, self.max_particle_range)
+                radius = random.uniform(-self.max_particle_range,
+                                        self.max_particle_range)
             else:
-                radius = random.gauss(initial_range_guess, initial_range_stddev)
+                radius = random.gauss(
+                    initial_range_guess, initial_range_stddev)
 
-            self.particles_state[i, 0] = observer_location.x + radius * np.cos(angle)
-            self.particles_state[i, 2] = observer_location.y + radius * np.sin(angle)
+            self.particles_state[i, 0] = observer_location.x + \
+                radius * np.cos(angle)
+            self.particles_state[i, 2] = observer_location.y + \
+                radius * np.sin(angle)
 
             initial_orientation = random.uniform(0, 2 * np.pi)
-            velocity_magnitude = abs(random.gauss(initial_velocity_guess, initial_velocity_guess / 2.0 + 1e-6))
-            self.particles_state[i, 1] = velocity_magnitude * np.cos(initial_orientation)
-            self.particles_state[i, 3] = velocity_magnitude * np.sin(initial_orientation)
+            velocity_magnitude = abs(random.gauss(
+                initial_velocity_guess, initial_velocity_guess / 2.0 + 1e-6))
+            self.particles_state[i, 1] = velocity_magnitude * \
+                np.cos(initial_orientation)
+            self.particles_state[i, 3] = velocity_magnitude * \
+                np.sin(initial_orientation)
 
         self.weights.fill(1.0 / self.num_particles)
         self.estimate_target_state()
@@ -95,7 +105,7 @@ class ParticleFilterCore:
         if not self.is_initialized:
             return
 
-        use_gaussian_noise = False # Keep original uniform noise behavior for process model
+        use_gaussian_noise = False  # Keep original uniform noise behavior for process model
 
         for i in range(self.num_particles):
             vx = self.particles_state[i, 1]
@@ -103,34 +113,44 @@ class ParticleFilterCore:
             current_orientation = np.arctan2(vy, vx)
 
             if use_gaussian_noise:
-                orientation_noise = random.gauss(0.0, self.process_noise_orientation)
+                orientation_noise = random.gauss(
+                    0.0, self.process_noise_orientation)
             else:
-                orientation_noise = random.uniform(-self.process_noise_orientation, self.process_noise_orientation)
+                orientation_noise = random.uniform(
+                    -self.process_noise_orientation, self.process_noise_orientation)
 
-            new_orientation = (current_orientation + orientation_noise) % (2 * np.pi)
+            new_orientation = (current_orientation +
+                               orientation_noise) % (2 * np.pi)
 
             current_velocity_magnitude = np.sqrt(vx**2 + vy**2)
 
             if use_gaussian_noise:
                 velocity_noise = random.gauss(0.0, self.process_noise_velocity)
             else:
-                velocity_noise = random.uniform(-self.process_noise_velocity, self.process_noise_velocity)
+                velocity_noise = random.uniform(
+                    -self.process_noise_velocity, self.process_noise_velocity)
 
-            new_velocity_magnitude = max(0.0, current_velocity_magnitude + velocity_noise)
+            new_velocity_magnitude = max(
+                0.0, current_velocity_magnitude + velocity_noise)
 
             distance_travelled = current_velocity_magnitude * dt
 
             if use_gaussian_noise:
                 position_noise = random.gauss(0.0, self.process_noise_position)
             else:
-                position_noise = random.uniform(-self.process_noise_position, self.process_noise_position)
+                position_noise = random.uniform(
+                    -self.process_noise_position, self.process_noise_position)
 
             effective_distance = distance_travelled + position_noise
 
-            self.particles_state[i, 0] += effective_distance * np.cos(new_orientation)
-            self.particles_state[i, 2] += effective_distance * np.sin(new_orientation)
-            self.particles_state[i, 1] = new_velocity_magnitude * np.cos(new_orientation)
-            self.particles_state[i, 3] = new_velocity_magnitude * np.sin(new_orientation)
+            self.particles_state[i, 0] += effective_distance * \
+                np.cos(new_orientation)
+            self.particles_state[i, 2] += effective_distance * \
+                np.sin(new_orientation)
+            self.particles_state[i, 1] = new_velocity_magnitude * \
+                np.cos(new_orientation)
+            self.particles_state[i, 3] = new_velocity_magnitude * \
+                np.sin(new_orientation)
 
     def _calculate_likelihood(self,
                               predicted_range: float,
@@ -161,14 +181,17 @@ class ParticleFilterCore:
                 return 1.0
 
             variance = noise_stddev ** 2
-            if variance < 1e-9: variance = 1e-9
-            exponent = -((predicted_range - measured_range) ** 2) / (2 * variance)
+            if variance < 1e-9:
+                variance = 1e-9
+            exponent = -((predicted_range - measured_range)
+                         ** 2) / (2 * variance)
             denominator = np.sqrt(2 * np.pi * variance)
             likelihood = np.exp(exponent) / denominator
-            return likelihood + 1e-9 # Add epsilon to prevent zero weights
+            return likelihood + 1e-9  # Add epsilon to prevent zero weights
 
         else:
-            raise ValueError(f"Unknown estimation_method: {self.estimation_method}")
+            raise ValueError(
+                f"Unknown estimation_method: {self.estimation_method}")
 
     def update_weights(self, measured_range: float, observer_location: Location):
         """
@@ -188,14 +211,16 @@ class ParticleFilterCore:
         predicted_ranges = np.sqrt(dx**2 + dy**2)
 
         for i in range(self.num_particles):
-            likelihood = self._calculate_likelihood(predicted_ranges[i], measured_range)
+            likelihood = self._calculate_likelihood(
+                predicted_ranges[i], measured_range)
             self.weights[i] *= likelihood
 
         total_weight = np.sum(self.weights)
         if total_weight > 1e-9:
             self.weights /= total_weight
         else:
-            print("Warning: Particle weights sum near zero. Reinitializing weights uniformly.")
+            print(
+                "Warning: Particle weights sum near zero. Reinitializing weights uniformly.")
             self.weights.fill(1.0 / self.num_particles)
 
     def resample_particles(self, method: int):
@@ -212,7 +237,7 @@ class ParticleFilterCore:
         n = self.num_particles
         initial_velocity_guess = self.config.initial_velocity_guess
 
-        if method == 1: # Multinomial Resampling
+        if method == 1:  # Multinomial Resampling
             index = int(random.random() * n)
             beta = 0.0
             max_weight = np.max(self.weights)
@@ -223,7 +248,7 @@ class ParticleFilterCore:
                     index = (index + 1) % n
                 new_particles_state[i, :] = self.particles_state[index, :]
 
-        elif method == 2: # Systematic Resampling
+        elif method == 2:  # Systematic Resampling
             cumulative_sum = np.cumsum(self.weights)
             step = 1.0 / n
             u = random.uniform(0, step)
@@ -234,13 +259,14 @@ class ParticleFilterCore:
                 new_particles_state[j, :] = self.particles_state[i, :]
                 u += step
 
-        elif method == 3 or method == 3.2: # Hybrid: Systematic + Random Injection
-            random_injection_ratio = 0.05 # Fixed ratio for random injection
+        elif method == 3 or method == 3.2:  # Hybrid: Systematic + Random Injection
+            random_injection_ratio = 0.05  # Fixed ratio for random injection
             num_random = int(n * random_injection_ratio)
             num_systematic = n - num_random
 
             if num_systematic > 0:
-                temp_particles_systematic = np.zeros((num_systematic, self.state_dimension))
+                temp_particles_systematic = np.zeros(
+                    (num_systematic, self.state_dimension))
                 cumulative_sum = np.cumsum(self.weights)
                 effective_total_weight = cumulative_sum[-1] if cumulative_sum[-1] > 1e-9 else 1.0
                 step = effective_total_weight / num_systematic
@@ -249,11 +275,13 @@ class ParticleFilterCore:
                 current_weight_sum = 0.0
                 for j in range(num_systematic):
                     target_weight = u + j * step
-                    while i < n -1 and current_weight_sum + self.weights[i] < target_weight:
-                         current_weight_sum += self.weights[i]
-                         i += 1
-                    temp_particles_systematic[j, :] = self.particles_state[i, :]
-                new_particles_state[:num_systematic, :] = temp_particles_systematic
+                    while i < n - 1 and current_weight_sum + self.weights[i] < target_weight:
+                        current_weight_sum += self.weights[i]
+                        i += 1
+                    temp_particles_systematic[j,
+                                              :] = self.particles_state[i, :]
+                new_particles_state[:num_systematic,
+                                    :] = temp_particles_systematic
 
             center_x, center_y, injection_radius = None, None, None
             injection_possible = False
@@ -261,33 +289,42 @@ class ParticleFilterCore:
                 if method == 3 and self.estimated_location is not None:
                     center_x = self.estimated_location.x
                     center_y = self.estimated_location.y
-                    injection_radius = 0.2 # Fixed radius for estimate-centered injection
+                    injection_radius = 0.2  # Fixed radius for estimate-centered injection
                     injection_possible = True
                 elif method == 3.2 and self.previous_observer_location is not None:
                     center_x = self.previous_observer_location.x
                     center_y = self.previous_observer_location.y
-                    injection_radius = self.max_particle_range # Use configured range
+                    injection_radius = self.max_particle_range  # Use configured range
                     injection_possible = True
 
                 if not injection_possible:
-                    print("Warning: Cannot perform random injection for resampling method", method)
+                    print(
+                        "Warning: Cannot perform random injection for resampling method", method)
                     if num_random > 0 and num_systematic > 0:
-                         indices_to_copy = np.argsort(self.weights)[-num_random:]
-                         new_particles_state[num_systematic:, :] = self.particles_state[indices_to_copy, :]
+                        indices_to_copy = np.argsort(
+                            self.weights)[-num_random:]
+                        new_particles_state[num_systematic:,
+                                            :] = self.particles_state[indices_to_copy, :]
                     elif num_random > 0:
-                         new_particles_state[num_systematic:, :] = self.particles_state[num_systematic:, :]
+                        new_particles_state[num_systematic:,
+                                            :] = self.particles_state[num_systematic:, :]
                 else:
                     for k in range(num_random):
                         idx = num_systematic + k
                         angle = random.uniform(0, 2 * np.pi)
                         radius = random.uniform(0, injection_radius)
-                        new_particles_state[idx, 0] = center_x + radius * np.cos(angle)
-                        new_particles_state[idx, 2] = center_y + radius * np.sin(angle)
+                        new_particles_state[idx, 0] = center_x + \
+                            radius * np.cos(angle)
+                        new_particles_state[idx, 2] = center_y + \
+                            radius * np.sin(angle)
 
                         orientation = random.uniform(0, 2 * np.pi)
-                        velocity_magnitude = abs(random.gauss(initial_velocity_guess, initial_velocity_guess / 2.0 + 1e-6))
-                        new_particles_state[idx, 1] = velocity_magnitude * np.cos(orientation)
-                        new_particles_state[idx, 3] = velocity_magnitude * np.sin(orientation)
+                        velocity_magnitude = abs(random.gauss(
+                            initial_velocity_guess, initial_velocity_guess / 2.0 + 1e-6))
+                        new_particles_state[idx,
+                                            1] = velocity_magnitude * np.cos(orientation)
+                        new_particles_state[idx,
+                                            3] = velocity_magnitude * np.sin(orientation)
 
         else:
             raise ValueError(f"Unsupported resampling method: {method}")
@@ -314,33 +351,40 @@ class ParticleFilterCore:
             mean_state = np.mean(self.particles_state, axis=0)
         elif method == 2:
             if total_weight < 1e-9:
-                 mean_state = np.mean(self.particles_state, axis=0)
+                mean_state = np.mean(self.particles_state, axis=0)
             else:
-                mean_state = np.average(self.particles_state, axis=0, weights=self.weights)
+                mean_state = np.average(
+                    self.particles_state, axis=0, weights=self.weights)
         else:
-             raise ValueError(f"Unsupported estimation method: {method}")
+            raise ValueError(f"Unsupported estimation method: {method}")
 
-        self.estimated_location = Location(x=mean_state[0], y=mean_state[2], depth=0.0)
-        self.estimated_velocity = Velocity(x=mean_state[1], y=mean_state[3], z=0.0)
+        self.estimated_location = Location(
+            x=mean_state[0], y=mean_state[2], depth=0.0)
+        self.estimated_velocity = Velocity(
+            x=mean_state[1], y=mean_state[3], z=0.0)
 
         try:
             if method == 2 and total_weight > 1e-9:
-                 x_coords = self.particles_state[:, 0]
-                 y_coords = self.particles_state[:, 2]
-                 avg_x = self.estimated_location.x
-                 avg_y = self.estimated_location.y
-                 cov_xx = np.sum(self.weights * (x_coords - avg_x)**2)
-                 cov_yy = np.sum(self.weights * (y_coords - avg_y)**2)
-                 cov_xy = np.sum(self.weights * (x_coords - avg_x) * (y_coords - avg_y))
-                 self.position_covariance_matrix = np.array([[cov_xx, cov_xy], [cov_xy, cov_yy]])
+                x_coords = self.particles_state[:, 0]
+                y_coords = self.particles_state[:, 2]
+                avg_x = self.estimated_location.x
+                avg_y = self.estimated_location.y
+                cov_xx = np.sum(self.weights * (x_coords - avg_x)**2)
+                cov_yy = np.sum(self.weights * (y_coords - avg_y)**2)
+                cov_xy = np.sum(self.weights * (x_coords - avg_x)
+                                * (y_coords - avg_y))
+                self.position_covariance_matrix = np.array(
+                    [[cov_xx, cov_xy], [cov_xy, cov_yy]])
             else:
-                 self.position_covariance_matrix = np.cov(self.particles_state[:, 0], self.particles_state[:, 2], ddof=0)
+                self.position_covariance_matrix = np.cov(
+                    self.particles_state[:, 0], self.particles_state[:, 2], ddof=0)
 
             vals, vecs = np.linalg.eig(self.position_covariance_matrix)
             order = vals.argsort()[::-1]
             vals, vecs = vals[order], vecs[:, order]
             self.position_covariance_eigenvalues = np.sqrt(np.maximum(0, vals))
-            self.position_covariance_orientation = np.arctan2(vecs[1, 0], vecs[0, 0])
+            self.position_covariance_orientation = np.arctan2(
+                vecs[1, 0], vecs[0, 0])
 
         except np.linalg.LinAlgError:
             print("Warning: Covariance matrix calculation failed (singular).")
@@ -357,7 +401,7 @@ class ParticleFilterCore:
             measured_range: The current measured range.
         """
         if not self.is_initialized:
-             return
+            return
 
         max_mean_range_error_factor = self.config.pf_eval_max_mean_range_error_factor
         dispersion_threshold = self.config.pf_eval_dispersion_threshold
@@ -365,8 +409,9 @@ class ParticleFilterCore:
 
         if self.estimation_method == 'area':
             if np.max(self.weights) < 0.1:
-                 print("Filter quality poor (max weight low in area method). Reinitializing.")
-                 self.is_initialized = False
+                print(
+                    "Filter quality poor (max weight low in area method). Reinitializing.")
+                self.is_initialized = False
             return
 
         if measured_range == -1:
@@ -379,12 +424,15 @@ class ParticleFilterCore:
         mean_range_error = abs(mean_particle_range - measured_range)
 
         confidence_scale = 1.96
-        ellipse_axis1 = self.position_covariance_eigenvalues[0] * confidence_scale
-        ellipse_axis2 = self.position_covariance_eigenvalues[1] * confidence_scale
+        ellipse_axis1 = self.position_covariance_eigenvalues[0] * \
+            confidence_scale
+        ellipse_axis2 = self.position_covariance_eigenvalues[1] * \
+            confidence_scale
         dispersion = np.sqrt(ellipse_axis1**2 + ellipse_axis2**2)
 
         if mean_range_error > max_mean_range_error and dispersion < dispersion_threshold:
-            print(f"Filter quality poor (Error: {mean_range_error:.1f} > {max_mean_range_error:.1f}, Dispersion: {dispersion:.1f} < {dispersion_threshold}). Reinitializing.")
+            print(
+                f"Filter quality poor (Error: {mean_range_error:.1f} > {max_mean_range_error:.1f}, Dispersion: {dispersion:.1f} < {dispersion_threshold}). Reinitializing.")
             self.is_initialized = False
 
 
@@ -395,6 +443,7 @@ class TrackedTargetPF:
     Represents a target whose state is estimated using a Particle Filter.
     This class acts as an interface to the ParticleFilterCore.
     """
+
     def __init__(self, config: ParticleFilterConfig):
         """
         Initializes the target tracker with a Particle Filter using configuration.
@@ -437,11 +486,12 @@ class TrackedTargetPF:
             perform_update_step: If False, only prediction is done.
         """
         if not perform_update_step and not self.pf_core.is_initialized:
-             return
+            return
 
         if not self.pf_core.is_initialized:
             if has_new_range and range_measurement > 0:
-                self.pf_core.initialize_particles(observer_location, range_measurement)
+                self.pf_core.initialize_particles(
+                    observer_location, range_measurement)
                 self.current_particles_state = self.pf_core.particles_state.copy()
             else:
                 return
@@ -453,7 +503,8 @@ class TrackedTargetPF:
             effective_range = range_measurement if has_new_range else -1.0
             self.pf_core.update_weights(effective_range, observer_location)
             self.pf_core.resample_particles(method=self.resampling_method)
-            self.pf_core.evaluate_filter_quality(observer_location, effective_range)
+            self.pf_core.evaluate_filter_quality(
+                observer_location, effective_range)
 
         self.pf_core.estimate_target_state(method=2)
 
@@ -480,11 +531,11 @@ class TrackedTargetPF:
         n_points = len(self.ls_observer_x_history)
         if n_points < 3:
             if self.ls_state_history:
-                 last_state = self.ls_state_history[-1].copy()
-                 if dt > 1e-9:
-                     last_state[0] += last_state[1] * dt
-                     last_state[2] += last_state[3] * dt
-                 self.ls_state_history.append(last_state)
+                last_state = self.ls_state_history[-1].copy()
+                if dt > 1e-9:
+                    last_state[0] += last_state[1] * dt
+                    last_state[2] += last_state[3] * dt
+                self.ls_state_history.append(last_state)
             return False
 
         start_idx = max(0, n_points - num_points_to_use)
@@ -493,7 +544,8 @@ class TrackedTargetPF:
         used_z = self.ls_range_history[start_idx:]
         num = len(used_x)
 
-        if num < 3: return False
+        if num < 3:
+            return False
 
         P = np.array([used_x, used_y])
         A = np.zeros((num, 3))
@@ -510,11 +562,11 @@ class TrackedTargetPF:
         except np.linalg.LinAlgError:
             print('WARNING: LS solution failed (singular matrix). Skipping LS update.')
             if self.ls_state_history:
-                 last_state = self.ls_state_history[-1].copy()
-                 if dt > 1e-9:
-                     last_state[0] += last_state[1] * dt
-                     last_state[2] += last_state[3] * dt
-                 self.ls_state_history.append(last_state)
+                last_state = self.ls_state_history[-1].copy()
+                if dt > 1e-9:
+                    last_state[0] += last_state[1] * dt
+                    last_state[2] += last_state[3] * dt
+                self.ls_state_history.append(last_state)
             return False
 
         ls_velocity = np.array([0.0, 0.0])
@@ -528,7 +580,7 @@ class TrackedTargetPF:
                 ls_velocity[0] = dx / dt
                 ls_velocity[1] = dy / dt
             if np.sqrt(dx**2 + dy**2) > 1e-6:
-                 ls_orientation = np.arctan2(dy, dx)
+                ls_orientation = np.arctan2(dy, dx)
             else:
                 ls_orientation = prev_state[4]
 

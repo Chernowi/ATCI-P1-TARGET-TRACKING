@@ -1,5 +1,6 @@
 class Velocity():
     """Represents the velocity of an object in 3D space."""
+
     def __init__(self, x: float, y: float, z: float):
         self.x = x
         self.y = y
@@ -16,6 +17,7 @@ class Velocity():
 
 class Location():
     """Represents the location of an object in 3D space (using 'depth' for z-axis)."""
+
     def __init__(self, x: float, y: float, depth: float):
         self.x = x
         self.y = y
@@ -34,10 +36,12 @@ class Location():
 
 class Object():
     """Represents a generic object with location and velocity."""
+
     def __init__(self, location: Location, velocity: Velocity = None, name: str = None):
         self.name = name if name else "Unnamed Object"
         self.location = location
-        self.velocity = velocity if velocity is not None else Velocity(0.0, 0.0, 0.0)
+        self.velocity = velocity if velocity is not None else Velocity(
+            0.0, 0.0, 0.0)
 
     def update_position(self, dt: float = 1.0):
         """Update the object's position based on its velocity and time step."""

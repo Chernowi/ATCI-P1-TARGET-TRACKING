@@ -11,6 +11,7 @@ class World():
     The agent learns to navigate towards a landmark using range measurements
     processed by a particle filter.
     """
+
     def __init__(self, world_config: WorldConfig, pf_config: ParticleFilterConfig):
         """
         Initialize the world simulation environment using configuration.
@@ -34,7 +35,7 @@ class World():
             x=true_landmark_loc_cfg.x, y=true_landmark_loc_cfg.y, depth=true_landmark_loc_cfg.depth
         )
         true_landmark_velocity = Velocity(
-             x=true_landmark_vel_cfg.x, y=true_landmark_vel_cfg.y, z=true_landmark_vel_cfg.z
+            x=true_landmark_vel_cfg.x, y=true_landmark_vel_cfg.y, z=true_landmark_vel_cfg.z
         )
         self.true_landmark = Object(
             location=true_landmark_location, velocity=true_landmark_velocity, name="true_landmark"
@@ -47,7 +48,7 @@ class World():
             x=agent_loc_cfg.x, y=agent_loc_cfg.y, depth=agent_loc_cfg.depth
         )
         agent_velocity = Velocity(
-             x=agent_vel_cfg.x, y=agent_vel_cfg.y, z=agent_vel_cfg.z
+            x=agent_vel_cfg.x, y=agent_vel_cfg.y, z=agent_vel_cfg.z
         )
         self.agent = Object(
             location=agent_location, velocity=agent_velocity, name="agent"
@@ -63,7 +64,6 @@ class World():
         self.error_dist = float('inf')
         self.done = False
         self._update_error_dist()
-
 
     def _calculate_range_measurement(self, loc1: Location, loc2: Location) -> float:
         """Helper function for range measurement (3D slant range)."""
@@ -83,7 +83,6 @@ class World():
         else:
             self.error_dist = float('inf')
 
-
     def step(self, action: Velocity, training: bool = True):
         """
         Advance the world state by one time step.
@@ -101,7 +100,7 @@ class World():
         )
         self.current_range = measurement
 
-        has_new_range = True # Assume measurement always valid unless logic changes
+        has_new_range = True  # Assume measurement always valid unless logic changes
         effective_measurement = measurement
 
         self.estimated_landmark.update(
@@ -124,9 +123,8 @@ class World():
                 self.done = True
                 self.reward += self.world_config.success_bonus
             if measurement > self.world_config.out_of_range_threshold:
-                 self.reward -= self.world_config.out_of_range_penalty
-                 # Consider setting self.done = True here if desired
-
+                self.done = True
+                self.reward -= self.world_config.out_of_range_penalty
 
     def encode_state(self) -> tuple:
         """
@@ -141,7 +139,7 @@ class World():
             est_loc = self.estimated_landmark.estimated_location
             landmark_x = est_loc.x
             landmark_y = est_loc.y
-            landmark_depth = 0.0 # PF estimate is 2D
+            landmark_depth = 0.0  # PF estimate is 2D
         else:
             # Use default values if PF estimate unavailable
             landmark_x = 0.0
@@ -163,7 +161,8 @@ class World():
         Note: Does not reconstruct the full particle filter state.
         """
         if len(state) != 8:
-            print(f"Warning: decode_state expected tuple of length 8, got {len(state)}")
+            print(
+                f"Warning: decode_state expected tuple of length 8, got {len(state)}")
             return
 
         self.agent.location.x = state[0]
@@ -173,7 +172,7 @@ class World():
 
         # Set the PF's estimate directly (approximation)
         if self.estimated_landmark.estimated_location is None:
-             self.estimated_landmark.estimated_location = Location(0,0,0)
+            self.estimated_landmark.estimated_location = Location(0, 0, 0)
         self.estimated_landmark.estimated_location.x = state[4]
         self.estimated_landmark.estimated_location.y = state[5]
         self.estimated_landmark.estimated_location.depth = state[6]
@@ -182,7 +181,6 @@ class World():
         self._update_error_dist()
         self.done = self.error_dist < self.success_threshold
 
-
     def __str__(self):
         """String representation of the world state."""
         est_str = "PF Not Initialized"
@@ -190,8 +188,8 @@ class World():
             est_loc = self.estimated_landmark.estimated_location
             est_vel_str = ""
             if self.estimated_landmark.estimated_velocity:
-                 est_vel = self.estimated_landmark.estimated_velocity
-                 est_vel_str = f", Vel:(vx:{est_vel.x:.2f}, vy:{est_vel.y:.2f})"
+                est_vel = self.estimated_landmark.estimated_velocity
+                est_vel_str = f", Vel:(vx:{est_vel.x:.2f}, vy:{est_vel.y:.2f})"
             est_str = f"Est Lmk: Pos:(x:{est_loc.x:.2f}, y:{est_loc.y:.2f}){est_vel_str}"
 
         true_lmk_str = f"True Lmk: {self.true_landmark}"
