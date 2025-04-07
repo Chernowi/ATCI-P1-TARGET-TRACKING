@@ -1,9 +1,11 @@
 from SAC import train_sac, evaluate_sac
 from world import World
-from configs import vast_config as config
+from configs import CONFIGS
 import torch
 
 if __name__ == "__main__":
+    config = CONFIGS["default"]
+    
     # Create world using config
     world = World(
         dt=config.world.dt,

@@ -24,8 +24,8 @@ class ReplayBufferConfig(BaseModel):
 
 class TrainingConfig(BaseModel):
     """Configuration for training"""
-    num_episodes: int = Field(1000, description="Number of episodes to train")
-    max_steps: int = Field(100, description="Maximum steps per episode")
+    num_episodes: int = Field(500, description="Number of episodes to train")
+    max_steps: int = Field(300, description="Maximum steps per episode")
     batch_size: int = Field(256, description="Batch size for training")
     replay_buffer_size: int = Field(1000000, description="Replay buffer size")
     save_interval: int = Field(100, description="Interval for saving models")
@@ -99,7 +99,12 @@ class DefaultConfig(BaseModel):
 # Create a default configuration instance
 default_config = DefaultConfig()
 
-vast_config = default_config.copy()
+vast_config = DefaultConfig()
 vast_config.training.num_episodes = 50000
 vast_config.training.max_steps = 200
 vast_config.training.save_interval = 5000
+
+CONFIGS = {
+    "default": default_config,
+    "vast": vast_config,
+}
