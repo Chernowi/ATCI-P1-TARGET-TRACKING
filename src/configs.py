@@ -8,7 +8,7 @@ class SACConfig(BaseModel):
         8, description="State dimension (agent_x, agent_y, agent_vx, agent_vy, landmark_x, landmark_y, landmark_depth, current_range)")
     action_dim: int = Field(2, description="Action dimension (vx, vy)")
     action_scale: float = Field(
-        8.0, description="Scale actions to reasonable velocity range")
+        4.0, description="Scale actions to reasonable velocity range")
     hidden_dim: int = Field(256, description="Hidden layer dimension")
     log_std_min: int = Field(-20,
                              description="Minimum log std for action distribution")
@@ -75,7 +75,7 @@ class WorldConfig(BaseModel):
     """Configuration for the world"""
     dt: float = Field(1.0, description="Time step")
     success_threshold: float = Field(
-        2.0, description="Distance threshold for successful landmark detection and early termination")
+        3.0, description="Distance threshold for successful landmark detection and early termination")
 
     agent_initial_location: Position = Field(
         default_factory=Position, description="Initial agent position (used if randomization is false)")
@@ -98,13 +98,13 @@ class WorldConfig(BaseModel):
         default_factory=RandomizationRange, description="Ranges for landmark location randomization")
 
     step_penalty: float = Field(
-        0.001, description="Penalty subtracted each step")
+        0.05, description="Penalty subtracted each step")
     success_bonus: float = Field(
         100.0, description="Bonus reward upon reaching success threshold")
     out_of_range_penalty: float = Field(
         100.0, description="Penalty if range exceeds threshold")
     out_of_range_threshold: float = Field(
-        70.0, description="Range threshold for out_of_range_penalty")
+        100.0, description="Range threshold for out_of_range_penalty")
 
 
 class ParticleFilterConfig(BaseModel):
