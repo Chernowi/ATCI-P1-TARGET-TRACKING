@@ -1,6 +1,5 @@
 from particle_filter import TrackedTargetPF
 from world_objects import Object, Location, Velocity
-from utils import calculate_distance
 
 import numpy as np
 
@@ -85,7 +84,7 @@ class World():
         # Let's assume for now the PF expects the direct slant range 'z'
         return distance
 
-    def step(self, action: Velocity):
+    def step(self, action: Velocity, training: bool = True):
         # Update agent based on action
         self.agent.velocity = action
         self.agent.update_position()  # Updates agent.location
@@ -104,27 +103,27 @@ class World():
                                        has_new_range=has_new_range,
                                        range_measurement=measurement,
                                        observer_location=self.agent.location)  # Pass agent's location object
-
-        # Calculate reward based on the *estimated* location from the PF
-        if self.estimated_landmark.estimated_location is not None:
-            # Use distance between estimated Location and true Location
-            est_loc = self.estimated_landmark.estimated_location
-            true_loc = self.true_landmark.location
-            # Calculate 2D or 3D distance based on what's relevant
-            self.error_dist = np.sqrt((est_loc.x - true_loc.x) **
-                                 2 + (est_loc.y - true_loc.y)**2)  # 2D example
-            self.reward = 1 / (self.error_dist + 1e-6)
-            
-            # Check if we've reached the success threshold
-            if self.error_dist < self.success_threshold:
-                self.done = True
-                self.reward += 10.0  # Bonus reward for success
-        else:
-            # Handle case where estimate isn't available yet (PF not initialized)
-            self.reward = 0  # Or some default low reward
-            self.error_dist = float('inf')
-            
-        self.reward -= 1  # Penalize for each step taken (to encourage efficiency)
+        if training:
+            # Calculate reward based on the *estimated* location from the PF
+            if self.estimated_landmark.estimated_location is not None:
+                # Use distance between estimated Location and true Location
+                est_loc = self.estimated_landmark.estimated_location
+                true_loc = self.true_landmark.location
+                # Calculate 2D or 3D distance based on what's relevant
+                self.error_dist = np.sqrt((est_loc.x - true_loc.x) **
+                                    2 + (est_loc.y - true_loc.y)**2)  # 2D example
+                self.reward = 1 / (self.error_dist + 1e-6)
+                
+                # Check if we've reached the success threshold
+                if self.error_dist < self.success_threshold:
+                    self.done = True
+                    self.reward += 10.0  # Bonus reward for success
+            else:
+                # Handle case where estimate isn't available yet (PF not initialized)
+                self.reward = 0  # Or some default low reward
+                self.error_dist = float('inf')
+                
+            self.reward -= 1  # Penalize for each step taken (to encourage efficiency)
 
         self.current_range = measurement  # Store the latest measurement
 

@@ -1,1 +1,0 @@
-DT = 1 #Time step

@@ -7,8 +7,10 @@ import torch.nn.functional as F
 from torch.distributions import Normal
 import random
 from collections import deque
+from tqdm import tqdm
 from world import World
 from world_objects import Velocity
+from visualization import visualize_world
 
 
 class ReplayBuffer:
@@ -261,7 +263,10 @@ def train_sac(env, num_episodes=1000, max_steps=100, batch_size=256, replay_buff
     # Track episode rewards
     episode_rewards = []
     
-    for episode in range(1, num_episodes + 1):
+    # Create progress bar for episodes
+    pbar = tqdm(range(1, num_episodes + 1), desc="Training", unit="episode")
+    
+    for episode in pbar:
         env = World(dt=1.0, success_threshold=success_threshold)  # Reset environment with success threshold
         episode_reward = 0
         state = env.encode_state()
@@ -294,14 +299,15 @@ def train_sac(env, num_episodes=1000, max_steps=100, batch_size=256, replay_buff
                 
         episode_rewards.append(episode_reward)
         
-        # Print progress
+        # Update progress bar with reward info
         if episode % 10 == 0:
             avg_reward = np.mean(episode_rewards[-10:])
-            print(f"Episode {episode}, Avg Reward (last 10): {avg_reward:.2f}")
-            
-            # Also report success rate in last 10 episodes
             success_count = sum(1 for i in range(episode-10, episode) if i >= 0 and episode_rewards[i] > 0)
-            print(f"Success rate (last 10): {success_count/min(10, episode):.2f}")
+            success_rate = success_count/min(10, episode)
+            pbar.set_postfix({
+                'avg_reward': f'{avg_reward:.2f}', 
+                'success_rate': f'{success_rate:.2f}'
+            })
         
         # Save model
         if episode % save_interval == 0:
@@ -323,20 +329,15 @@ def evaluate_sac(agent, env, num_episodes=5, max_steps=100, render=True, success
         
         # Visualization setup
         if render:
-            from visualization import visualize_world
+            from visualization import reset_trajectories, visualize_world, save_gif
             snapshot_dir = "world_snapshots"
             os.makedirs(snapshot_dir, exist_ok=True)
             
-            # Clear previous frames
-            for filename in os.listdir(snapshot_dir):
-                if filename.startswith("eval_frame_") and filename.endswith(".png"):
-                    try:
-                        os.remove(os.path.join(snapshot_dir, filename))
-                    except OSError:
-                        pass
-                        
+            # Reset trajectories and frames for this episode
+            reset_trajectories()
+            
             # Visualize initial state
-            visualize_world(env, filename="eval_frame_000_initial.png")
+            visualize_world(env, filename=f"eval_ep{episode+1}_frame_000_initial.png")
         
         for step in range(max_steps):
             # Select action (deterministic evaluation)
@@ -346,11 +347,11 @@ def evaluate_sac(agent, env, num_episodes=5, max_steps=100, render=True, success
             action = Velocity(action_tensor[0], action_tensor[1], 0.0)
             
             # Apply to environment
-            env.step(action)
+            env.step(action, training=False)
             
             # Visualize if requested
             if render:
-                visualize_world(env, filename=f"eval_frame_{step+1:03d}.png")
+                visualize_world(env, filename=f"eval_ep{episode+1}_frame_{step+1:03d}.png")
                 
             # Get reward and next state
             reward = env.reward
@@ -365,26 +366,18 @@ def evaluate_sac(agent, env, num_episodes=5, max_steps=100, render=True, success
             
         eval_rewards.append(episode_reward)
         print(f"Evaluation Episode {episode+1}: Total Reward: {episode_reward:.2f}, Error: {env.error_dist:.2f}")
+        
+        # Create a GIF for this episode if rendering
+        if render:
+            from visualization import save_gif
+            save_gif(f"eval_episode_{episode+1}.gif", duration=0.2, delete_frames=True)
+    
+    # Create a combined GIF of all episodes if multiple were evaluated
+    if render and num_episodes > 1:
+        from visualization import create_gif_from_files
+        create_gif_from_files("eval_episode_*.gif", "evaluation_all_episodes.gif", duration=1.0)
     
     print(f"Average Evaluation Reward: {np.mean(eval_rewards):.2f}")
     print(f"Success Rate: {success_count/num_episodes:.2f} ({success_count}/{num_episodes})")
+    print(f"GIFs saved in the '{os.path.abspath('world_snapshots')}' directory.")
     return eval_rewards
-
-
-if __name__ == "__main__":
-    # Example usage
-    world = World(dt=1.0)
-    
-    # Train SAC
-    print("Training SAC agent...")
-    agent, rewards = train_sac(world, num_episodes=100, max_steps=500)
-    
-    # Save final model
-    agent.save_model("sac_models/sac_final.pt")
-    
-    # Evaluate
-    print("\nEvaluating SAC agent...")
-    evaluate_sac(agent, world, num_episodes=1, max_steps=100, render=True)
-    
-    print("\nTraining complete. Find output in the world_snapshots directory.")
-    print("You can convert the frames to a video using ffmpeg.")
