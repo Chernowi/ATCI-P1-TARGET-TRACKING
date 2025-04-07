@@ -98,3 +98,8 @@ class DefaultConfig(BaseModel):
 
 # Create a default configuration instance
 default_config = DefaultConfig()
+
+vast_config = default_config.copy()
+vast_config.training.num_episodes = 50000
+vast_config.training.max_steps = 200
+vast_config.training.save_interval = 5000

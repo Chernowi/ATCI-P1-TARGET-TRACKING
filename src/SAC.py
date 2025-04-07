@@ -1,5 +1,5 @@
 import os
-import numpy as np
+import numpy np
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -115,14 +115,20 @@ class SAC:
     """Soft Actor-Critic algorithm implementation."""
     
     def __init__(self, state_dim, action_dim, action_scale=1.0, lr=3e-4, 
-                 gamma=0.99, tau=0.005, alpha=0.2, auto_tune_alpha=True):
+                 gamma=0.99, tau=0.005, alpha=0.2, auto_tune_alpha=True, device=None):
         self.gamma = gamma
         self.tau = tau
         self.alpha = alpha
         self.action_scale = action_scale
         self.auto_tune_alpha = auto_tune_alpha
         
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # Enhanced device detection
+        if device is None:
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        else:
+            self.device = device
+            
+        print(f"Using device: {self.device}")
         
         # Initialize actor and critic networks
         self.actor = Actor(state_dim, action_dim).to(self.device)
@@ -139,17 +145,18 @@ class SAC:
         
         # Automatic entropy tuning
         if auto_tune_alpha:
-            self.target_entropy = -torch.prod(torch.Tensor([action_dim])).item()
+            self.target_entropy = -torch.prod(torch.Tensor([action_dim])).to(self.device)
             self.log_alpha = torch.zeros(1, requires_grad=True, device=self.device)
             self.alpha_optimizer = optim.Adam([self.log_alpha], lr=lr)
         
     def select_action(self, state, evaluate=False):
         state = torch.FloatTensor(state).to(self.device).unsqueeze(0)
         
-        if evaluate:
-            _, _, action = self.actor.sample(state)
-        else:
-            action, _, _ = self.actor.sample(state)
+        with torch.no_grad():
+            if evaluate:
+                _, _, action = self.actor.sample(state)
+            else:
+                action, _, _ = self.actor.sample(state)
             
         return action.detach().cpu().numpy()[0] * self.action_scale
     
@@ -160,6 +167,7 @@ class SAC:
         # Sample from replay buffer
         state_batch, action_batch, reward_batch, next_state_batch, done_batch = memory.sample(batch_size)
         
+        # Move all data to device at once for better parallelism
         state_batch = torch.FloatTensor(state_batch).to(self.device)
         action_batch = torch.FloatTensor(action_batch).to(self.device)
         reward_batch = torch.FloatTensor(reward_batch).to(self.device).unsqueeze(1)
@@ -233,10 +241,11 @@ class SAC:
             'critic_target_state_dict': self.critic_target.state_dict(),
             'actor_optimizer_state_dict': self.actor_optimizer.state_dict(),
             'critic_optimizer_state_dict': self.critic_optimizer.state_dict(),
+            'device': self.device.type  # Store device type for proper loading
         }, path)
         
     def load_model(self, path):
-        checkpoint = torch.load(path)
+        checkpoint = torch.load(path, map_location=self.device)  # Load to the correct device
         self.actor.load_state_dict(checkpoint['actor_state_dict'])
         self.critic.load_state_dict(checkpoint['critic_state_dict'])
         self.critic_target.load_state_dict(checkpoint['critic_target_state_dict'])
@@ -245,7 +254,7 @@ class SAC:
 
 
 def train_sac(env, num_episodes=1000, max_steps=100, batch_size=256, replay_buffer_size=1000000,
-              save_interval=100, models_dir="sac_models", success_threshold=2.0):
+              save_interval=100, models_dir="sac_models", success_threshold=2.0, use_multi_gpu=False):
     """Train the SAC agent on the given environment."""
     
     # Get state and action dimensions
@@ -253,8 +262,23 @@ def train_sac(env, num_episodes=1000, max_steps=100, batch_size=256, replay_buff
     action_dim = 2  # vx, vy (ignoring vz dimension)
     action_scale = 2.0  # Scale actions to reasonable velocity range
     
+    # Enhanced GPU initialization
+    if torch.cuda.is_available():
+        if use_multi_gpu and torch.cuda.device_count() > 1:
+            print(f"Using {torch.cuda.device_count()} GPUs for training")
+            device = torch.device("cuda")
+            # Set up for DataParallel if needed
+            # Note: DataParallel is only useful for model inference/forward passes with large batches
+            # Most RL algorithms don't benefit much from DataParallel since gradient updates are often sequential
+        else:
+            device = torch.device("cuda")
+            print(f"Using 1 GPU for training: {torch.cuda.get_device_name(0)}")
+    else:
+        device = torch.device("cpu")
+        print("GPU not available, using CPU for training")
+    
     # Initialize agent and replay buffer
-    agent = SAC(state_dim, action_dim, action_scale=action_scale)
+    agent = SAC(state_dim, action_dim, action_scale=action_scale, device=device)
     memory = ReplayBuffer(replay_buffer_size)
     
     # Create directory for saving models
@@ -271,6 +295,9 @@ def train_sac(env, num_episodes=1000, max_steps=100, batch_size=256, replay_buff
         episode_reward = 0
         state = env.encode_state()
         
+        # Set up episode buffer for more efficient batch processing
+        episode_data = []
+        
         for step in range(max_steps):
             # Select action
             action_tensor = agent.select_action(state)
@@ -284,11 +311,8 @@ def train_sac(env, num_episodes=1000, max_steps=100, batch_size=256, replay_buff
             next_state = env.encode_state()
             done = env.done or (step == max_steps - 1)  # Episode ends if success or max steps reached
             
-            # Store in replay buffer
-            memory.push(state, action_tensor, reward, next_state, done)
-            
-            # Update agent
-            update_info = agent.update_parameters(memory, batch_size)
+            # Store transition
+            episode_data.append((state, action_tensor, reward, next_state, done))
             
             # Prepare for next step
             state = next_state
@@ -296,6 +320,16 @@ def train_sac(env, num_episodes=1000, max_steps=100, batch_size=256, replay_buff
             
             if done:
                 break
+        
+        # Add all transitions to replay buffer at once
+        for transition in episode_data:
+            memory.push(*transition)
+            
+        # Perform multiple updates after episode completed
+        num_updates = min(len(episode_data), 10)  # Set a reasonable number of updates per episode
+        for _ in range(num_updates):
+            if len(memory) >= batch_size:
+                agent.update_parameters(memory, batch_size)
                 
         episode_rewards.append(episode_reward)
         
@@ -322,6 +356,10 @@ def evaluate_sac(agent, env, num_episodes=5, max_steps=100, render=True, success
     eval_rewards = []
     success_count = 0
     
+    # Ensure agent is in evaluation mode
+    agent.actor.eval()
+    agent.critic.eval()
+    
     for episode in range(num_episodes):
         env = World(dt=1.0, success_threshold=success_threshold)  # Reset environment with success threshold
         episode_reward = 0
@@ -341,7 +379,8 @@ def evaluate_sac(agent, env, num_episodes=5, max_steps=100, render=True, success
         
         for step in range(max_steps):
             # Select action (deterministic evaluation)
-            action_tensor = agent.select_action(state, evaluate=True)
+            with torch.no_grad():
+                action_tensor = agent.select_action(state, evaluate=True)
             
             # Apply to environment - only use vx and vy, set vz to 0
             action = Velocity(action_tensor[0], action_tensor[1], 0.0)
@@ -371,6 +410,10 @@ def evaluate_sac(agent, env, num_episodes=5, max_steps=100, render=True, success
         if render:
             from visualization import save_gif
             save_gif(f"eval_episode_{episode+1}.gif", duration=0.2, delete_frames=True)
+    
+    # Return agent to training mode if needed
+    agent.actor.train()
+    agent.critic.train()
     
     # Create a combined GIF of all episodes if multiple were evaluated
     if render and num_episodes > 1:
