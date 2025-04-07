@@ -6,7 +6,7 @@ class SACConfig(BaseModel):
     """Configuration for the SAC agent"""
     state_dim: int = Field(8, description="State dimension (agent_x, agent_y, agent_vx, agent_vy, landmark_x, landmark_y, landmark_depth, current_range)")
     action_dim: int = Field(2, description="Action dimension (vx, vy)")
-    action_scale: float = Field(2.0, description="Scale actions to reasonable velocity range")
+    action_scale: float = Field(8.0, description="Scale actions to reasonable velocity range")
     hidden_dim: int = Field(256, description="Hidden layer dimension")
     log_std_min: int = Field(-20, description="Minimum log std for action distribution")
     log_std_max: int = Field(2, description="Maximum log std for action distribution")
@@ -24,21 +24,18 @@ class ReplayBufferConfig(BaseModel):
 
 class TrainingConfig(BaseModel):
     """Configuration for training"""
-    num_episodes: int = Field(500, description="Number of episodes to train")
-    max_steps: int = Field(300, description="Maximum steps per episode")
+    num_episodes: int = Field(1000, description="Number of episodes to train")
+    max_steps: int = Field(500, description="Maximum steps per episode")
     batch_size: int = Field(256, description="Batch size for training")
-    replay_buffer_size: int = Field(1000000, description="Replay buffer size")
     save_interval: int = Field(100, description="Interval for saving models")
     models_dir: str = Field("sac_models", description="Directory for saving models")
-    success_threshold: float = Field(2.0, description="Threshold for successful landmark detection")
 
 
 class EvaluationConfig(BaseModel):
     """Configuration for evaluation"""
-    num_episodes: int = Field(5, description="Number of episodes for evaluation")
-    max_steps: int = Field(100, description="Maximum steps per evaluation episode")
+    num_episodes: int = Field(1, description="Number of episodes for evaluation")
+    max_steps: int = Field(300, description="Maximum steps per evaluation episode")
     render: bool = Field(True, description="Whether to render the evaluation")
-    success_threshold: float = Field(2.0, description="Threshold for successful landmark detection")
 
 
 class Position(BaseModel):
@@ -58,11 +55,15 @@ class Velocity(BaseModel):
 class WorldConfig(BaseModel):
     """Configuration for the world"""
     dt: float = Field(1.0, description="Time step")
-    success_threshold: float = Field(2.0, description="Distance threshold for successful landmark detection")
+    success_threshold: float = Field(2.0, description="Distance threshold for successful landmark detection and early termination")
     agent_initial_location: Position = Field(default_factory=Position, description="Initial agent position")
     landmark_initial_location: Position = Field(default_factory=lambda: Position(x=42, y=42, depth=42), description="Initial landmark position")
     agent_initial_velocity: Velocity = Field(default_factory=Velocity, description="Initial agent velocity")
     landmark_initial_velocity: Velocity = Field(default_factory=Velocity, description="Initial landmark velocity")
+    step_penalty: float = Field(0.001, description="Penalty subtracted each step")
+    success_bonus: float = Field(100.0, description="Bonus reward upon reaching success threshold")
+    out_of_range_penalty: float = Field(100.0, description="Penalty if range exceeds threshold")
+    out_of_range_threshold: float = Field(70.0, description="Range threshold for out_of_range_penalty")
 
 
 class ParticleFilterConfig(BaseModel):
@@ -71,18 +72,23 @@ class ParticleFilterConfig(BaseModel):
     initial_range_stddev: float = Field(0.02, description="Standard deviation for initial particle spread")
     initial_velocity_guess: float = Field(0.1, description="Initial velocity guess for particles")
     estimation_method: Literal["range", "area"] = Field("range", description="Method for estimation (range or area)")
-    max_particle_range: float = Field(250.0, description="Maximum range for particles")
+    max_particle_range: float = Field(250.0, description="Maximum range for particles (used in area method or init)")
     process_noise_pos: float = Field(0.02, description="Process noise for position")
     process_noise_orient: float = Field(0.2, description="Process noise for orientation")
     process_noise_vel: float = Field(0.02, description="Process noise for velocity")
     measurement_noise_stddev: float = Field(5.0, description="Standard deviation for measurement noise")
     resampling_method: int = Field(2, description="Method for resampling")
+    pf_eval_max_mean_range_error_factor: float = Field(0.1, description="Factor of max_particle_range used as threshold for PF quality check")
+    pf_eval_dispersion_threshold: float = Field(5.0, description="Dispersion threshold for PF quality check")
 
 
 class VisualizationConfig(BaseModel):
     """Configuration for visualization"""
     save_dir: str = Field("world_snapshots", description="Directory for saving visualizations")
     figure_size: tuple = Field((10, 8), description="Figure size for visualizations")
+    max_trajectory_points: int = Field(100, description="Max trajectory points to display")
+    gif_frame_duration: float = Field(0.2, description="Duration of each frame in generated GIFs")
+    delete_frames_after_gif: bool = Field(True, description="Delete individual PNG frames after creating GIF")
 
 
 class DefaultConfig(BaseModel):
@@ -96,15 +102,20 @@ class DefaultConfig(BaseModel):
     visualization: VisualizationConfig = Field(default_factory=VisualizationConfig, description="Visualization configuration")
 
 
-# Create a default configuration instance
 default_config = DefaultConfig()
 
 vast_config = DefaultConfig()
 vast_config.training.num_episodes = 50000
 vast_config.training.max_steps = 200
 vast_config.training.save_interval = 5000
+vast_config.particle_filter.num_particles = 5000
 
-CONFIGS = {
+fast_config = DefaultConfig()
+fast_config.training.num_episodes = 10
+fast_config.training.max_steps = 200
+
+CONFIGS: Dict[str, DefaultConfig] = {
     "default": default_config,
     "vast": vast_config,
+    "fast": fast_config,
 }

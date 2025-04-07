@@ -1,189 +1,230 @@
 from particle_filter import TrackedTargetPF
 from world_objects import Object, Location, Velocity
+from configs import WorldConfig, ParticleFilterConfig
 
 import numpy as np
 
 
 class World():
-    def __init__(self, dt: float = 1.0, success_threshold: float = 2.0):  # Add success_threshold parameter
-        # --- Particle Filter Configuration ---
-        # Match these parameters to how tracking.py initializes its Target/ParticleFilter
-        # Example values (adjust as needed):
-        num_particles = 1000
-        initial_velocity_guess = 0.1
-        measurement_noise_stddev = 5  # Corresponds to range noise
-        process_noise_pos = 0.02
-        process_noise_orient = 0.2
-        process_noise_vel = 0.02
-        # --- End Configuration ---
+    """
+    Represents the simulation environment containing an agent and landmarks.
+    The agent learns to navigate towards a landmark using range measurements
+    processed by a particle filter.
+    """
+    def __init__(self, world_config: WorldConfig, pf_config: ParticleFilterConfig):
+        """
+        Initialize the world simulation environment using configuration.
 
-        # Use the refactored class
-        self.estimated_landmark = TrackedTargetPF(
-            num_particles=num_particles,
-            initial_velocity_guess=initial_velocity_guess,
-            measurement_noise_stddev=measurement_noise_stddev,
-            process_noise_pos=process_noise_pos,
-            process_noise_orient=process_noise_orient,
-            process_noise_vel=process_noise_vel,
-            # Add other parameters if defaults in TrackedTargetPF aren't suitable
+        Args:
+            world_config: Configuration object for the world settings.
+            pf_config: Configuration object for the particle filter settings.
+        """
+        self.world_config = world_config
+        self.pf_config = pf_config
+        self.dt = world_config.dt
+        self.success_threshold = world_config.success_threshold
+
+        # Initialize the Particle Filter tracker
+        self.estimated_landmark = TrackedTargetPF(config=pf_config)
+
+        # Initialize True Landmark
+        true_landmark_loc_cfg = world_config.landmark_initial_location
+        true_landmark_vel_cfg = world_config.landmark_initial_velocity
+        true_landmark_location = Location(
+            x=true_landmark_loc_cfg.x, y=true_landmark_loc_cfg.y, depth=true_landmark_loc_cfg.depth
+        )
+        true_landmark_velocity = Velocity(
+             x=true_landmark_vel_cfg.x, y=true_landmark_vel_cfg.y, z=true_landmark_vel_cfg.z
+        )
+        self.true_landmark = Object(
+            location=true_landmark_location, velocity=true_landmark_velocity, name="true_landmark"
         )
 
-        true_landmark_location = Location(42, 42, 42)  # Original example
-        self.true_landmark = Object(
-            location=true_landmark_location, name="true_landmark")
-        # Give true landmark a velocity if it should move
-        self.true_landmark.velocity = Velocity(
-            0.0, 0.0, 0.0)  # Example: Static
+        # Initialize Agent
+        agent_loc_cfg = world_config.agent_initial_location
+        agent_vel_cfg = world_config.agent_initial_velocity
+        agent_location = Location(
+            x=agent_loc_cfg.x, y=agent_loc_cfg.y, depth=agent_loc_cfg.depth
+        )
+        agent_velocity = Velocity(
+             x=agent_vel_cfg.x, y=agent_vel_cfg.y, z=agent_vel_cfg.z
+        )
+        self.agent = Object(
+            location=agent_location, velocity=agent_velocity, name="agent"
+        )
 
-        agent_location = Location(0, 0, 0)  # Original example
-        self.agent = Object(location=agent_location, name="agent")
-        # Agent needs an initial velocity?
-        self.agent.velocity = Velocity(0.0, 0.0, 0.0)
-
-        # estimated_landmark is separate logic
         self.objects = [self.true_landmark, self.agent]
 
-        # Calculate initial range (use Location directly)
+        # Initial calculations
         self.current_range = self._calculate_range_measurement(
-            self.agent.location, self.true_landmark.location)
-
-        self.reward = 0
-        self.dt = dt  # Store timestep if needed globally
-        
-        # Add variables for early termination
-        self.success_threshold = success_threshold
+            self.agent.location, self.true_landmark.location
+        )
+        self.reward = 0.0
         self.error_dist = float('inf')
         self.done = False
+        self._update_error_dist()
 
-    # Helper function for range measurement (can add noise here)
+
     def _calculate_range_measurement(self, loc1: Location, loc2: Location) -> float:
-        # Basic 3D distance, PF currently uses 2D projection internally after this step
+        """Helper function for range measurement (3D slant range)."""
         dx = loc1.x - loc2.x
         dy = loc1.y - loc2.y
-        dz = loc1.depth - loc2.depth  # Use depth too for slant range
+        dz = loc1.depth - loc2.depth
         distance = np.sqrt(dx**2 + dy**2 + dz**2)
-
-        # --- Optional: Add noise/error similar to tracking.py ---
-        # distance *= 1.01 # Systematic error
-        # distance += np.random.uniform(-0.001, +0.001) # Noise
-        # ---
-
-        # --- Optional: Simulate max range / drop rate ---
-        # max_range_setting = 200.0 # Example
-        # drop_probability = 0.1 # Example
-        # if distance > max_range_setting or np.random.rand() < drop_probability:
-        #     return -1.0 # Indicate no valid measurement
-        # ---
-
-        # The refactored PF expects the 2D planar range if depth is handled separately.
-        # If the PF handles slant range directly, return 'distance'.
-        # If it expects planar range (like original seems to), convert back:
-        # planar_distance = np.sqrt(max(0, distance**2 - dz**2)) # Ensure non-negative argument
-        # return planar_distance
-
-        # Let's assume for now the PF expects the direct slant range 'z'
         return distance
 
-    def step(self, action: Velocity, training: bool = True):
-        # Update agent based on action
-        self.agent.velocity = action
-        self.agent.update_position()  # Updates agent.location
-
-        # Update true landmark (if it moves)
-        self.true_landmark.update_position()  # Updates true_landmark.location
-
-        # Calculate the new range measurement
-        # Assume has_new_range is always True for simplicity here, adjust if needed
-        has_new_range = True
-        measurement = self._calculate_range_measurement(
-            self.agent.location, self.true_landmark.location)
-
-        # Update the particle filter
-        self.estimated_landmark.update(dt=self.dt,  # Pass the time step
-                                       has_new_range=has_new_range,
-                                       range_measurement=measurement,
-                                       observer_location=self.agent.location)  # Pass agent's location object
-        if training:
-            # Calculate reward based on the *estimated* location from the PF
-            if self.estimated_landmark.estimated_location is not None:
-                # Use distance between estimated Location and true Location
-                est_loc = self.estimated_landmark.estimated_location
-                true_loc = self.true_landmark.location
-                # Calculate 2D or 3D distance based on what's relevant
-                self.error_dist = np.sqrt((est_loc.x - true_loc.x) **
-                                    2 + (est_loc.y - true_loc.y)**2)  # 2D example
-                self.reward = 1 / (self.error_dist + 1e-6)
-                
-                # Check if we've reached the success threshold
-                if self.error_dist < self.success_threshold:
-                    self.done = True
-                    self.reward += 10.0  # Bonus reward for success
-            else:
-                # Handle case where estimate isn't available yet (PF not initialized)
-                self.reward = 0  # Or some default low reward
-                self.error_dist = float('inf')
-                
-            self.reward -= 1  # Penalize for each step taken (to encourage efficiency)
-
-        self.current_range = measurement  # Store the latest measurement
-
-    def encode_state(self):
-        """Return the state as a tuple (agent_x, agent_y, agent_vx, agent_vy, landmark_x, landmark_y, landmark_depth, previous_range)
-         where landmark is the estimated landmark."""
-        agent_x = self.agent.location.x
-        agent_y = self.agent.location.y
-        agent_vx = self.agent.velocity.x
-        agent_vy = self.agent.velocity.y
-        if self.estimated_landmark.estimated_location is None:
-            landmark_x = self.agent.location.x
-            landmark_y = self.agent.location.y
-            landmark_depth = self.agent.location.depth
+    def _update_error_dist(self):
+        """Helper to calculate 2D distance between true and estimated landmark."""
+        if self.estimated_landmark.estimated_location is not None:
+            est_loc = self.estimated_landmark.estimated_location
+            true_loc = self.true_landmark.location
+            self.error_dist = np.sqrt((est_loc.x - true_loc.x)**2 +
+                                      (est_loc.y - true_loc.y)**2)
         else:
-            landmark_x = self.estimated_landmark.estimated_location.x
-            landmark_y = self.estimated_landmark.estimated_location.y
-            landmark_depth = self.estimated_landmark.estimated_location.depth
+            self.error_dist = float('inf')
 
-        current_range = self.current_range
 
-        # Return the state as a tuple
-        return (agent_x, agent_y, agent_vx, agent_vy,
-                landmark_x, landmark_y, landmark_depth, current_range)
+    def step(self, action: Velocity, training: bool = True):
+        """
+        Advance the world state by one time step.
+
+        Args:
+            action (Velocity): The velocity action applied to the agent.
+            training (bool): Flag indicating if rewards/termination should be calculated.
+        """
+        self.agent.velocity = action
+        self.agent.update_position(self.dt)
+        self.true_landmark.update_position(self.dt)
+
+        measurement = self._calculate_range_measurement(
+            self.agent.location, self.true_landmark.location
+        )
+        self.current_range = measurement
+
+        has_new_range = True # Assume measurement always valid unless logic changes
+        effective_measurement = measurement
+
+        self.estimated_landmark.update(
+            dt=self.dt,
+            has_new_range=has_new_range,
+            range_measurement=effective_measurement,
+            observer_location=self.agent.location
+        )
+
+        self.reward = 0.0
+        self.done = False
+        if training:
+            self._update_error_dist()
+            if self.error_dist != float('inf'):
+                self.reward = 1.0 / (self.error_dist + 1e-6)
+            else:
+                self.reward = 0.0
+            self.reward -= self.world_config.step_penalty
+            if self.error_dist < self.success_threshold:
+                self.done = True
+                self.reward += self.world_config.success_bonus
+            if measurement > self.world_config.out_of_range_threshold:
+                 self.reward -= self.world_config.out_of_range_penalty
+                 # Consider setting self.done = True here if desired
+
+
+    def encode_state(self) -> tuple:
+        """
+        Encodes the current state for the RL agent.
+
+        State: (agent_x, agent_y, agent_vx, agent_vy, est_landmark_x, est_landmark_y, est_landmark_depth (0), current_range)
+        """
+        agent_loc = self.agent.location
+        agent_vel = self.agent.velocity
+
+        if self.estimated_landmark.estimated_location is not None:
+            est_loc = self.estimated_landmark.estimated_location
+            landmark_x = est_loc.x
+            landmark_y = est_loc.y
+            landmark_depth = 0.0 # PF estimate is 2D
+        else:
+            # Use default values if PF estimate unavailable
+            landmark_x = 0.0
+            landmark_y = 0.0
+            landmark_depth = 0.0
+
+        state = (
+            agent_loc.x, agent_loc.y,
+            agent_vel.x, agent_vel.y,
+            landmark_x, landmark_y, landmark_depth,
+            self.current_range
+        )
+        assert len(state) == 8, f"Encoded state length {len(state)} != 8"
+        return state
 
     def decode_state(self, state: tuple):
-        """Decode the state tuple into the agent and landmark locations and velocities."""
-        agent_location = Location(state[0], state[1], 0)
-        agent_velocity = Velocity(state[2], state[3], 0)
-        landmark_location = Location(state[4], state[5], state[6])
+        """
+        Decodes a state tuple back into world objects (primarily for debugging/testing).
+        Note: Does not reconstruct the full particle filter state.
+        """
+        if len(state) != 8:
+            print(f"Warning: decode_state expected tuple of length 8, got {len(state)}")
+            return
 
-        self.agent.location = agent_location
-        self.agent.velocity = agent_velocity
-        self.estimated_landmark.location = landmark_location
+        self.agent.location.x = state[0]
+        self.agent.location.y = state[1]
+        self.agent.velocity.x = state[2]
+        self.agent.velocity.y = state[3]
+
+        # Set the PF's estimate directly (approximation)
+        if self.estimated_landmark.estimated_location is None:
+             self.estimated_landmark.estimated_location = Location(0,0,0)
+        self.estimated_landmark.estimated_location.x = state[4]
+        self.estimated_landmark.estimated_location.y = state[5]
+        self.estimated_landmark.estimated_location.depth = state[6]
+
+        self.current_range = state[7]
+        self._update_error_dist()
+        self.done = self.error_dist < self.success_threshold
+
 
     def __str__(self):
-        est_str = "Not Initialized"
+        """String representation of the world state."""
+        est_str = "PF Not Initialized"
         if self.estimated_landmark.estimated_location:
             est_loc = self.estimated_landmark.estimated_location
-            # Add velocity if desired
-            # est_vel = self.estimated_landmark.estimated_velocity
-            est_str = f"position: (x:{est_loc.x:.2f}, y:{est_loc.y:.2f}, depth:{est_loc.depth:.2f})"
+            est_vel_str = ""
+            if self.estimated_landmark.estimated_velocity:
+                 est_vel = self.estimated_landmark.estimated_velocity
+                 est_vel_str = f", Vel:(vx:{est_vel.x:.2f}, vy:{est_vel.y:.2f})"
+            est_str = f"Est Lmk: Pos:(x:{est_loc.x:.2f}, y:{est_loc.y:.2f}){est_vel_str}"
 
-        return f"""World:
-        {"-"*15}
-        reward: {self.reward:.4f},
-        current_range: {self.current_range:.2f}
-        error_dist: {self.error_dist:.2f}
-        {"-"*15}
-        agent: {self.agent}
-        {"-"*15}
-        true landmark: {self.true_landmark}
-        {"-"*15}
-        estimated landmark: {est_str}
-        {"-"*15}"""
+        true_lmk_str = f"True Lmk: {self.true_landmark}"
+        agent_str = f"Agent: {self.agent}"
+
+        return (
+            f"--- World State ---\n"
+            f" Reward: {self.reward:.4f}, Done: {self.done}\n"
+            f" Range: {self.current_range:.2f}, Error (2D): {self.error_dist:.2f}\n"
+            f" {agent_str}\n"
+            f" {true_lmk_str}\n"
+            f" {est_str}\n"
+            f"-------------------"
+        )
 
 
 if __name__ == "__main__":
-    world = World()
+    from configs import DefaultConfig
+
+    cfg = DefaultConfig()
+    world_cfg = cfg.world
+    pf_cfg = cfg.particle_filter
+
+    print("Initializing world with default configuration...")
+    world = World(world_config=world_cfg, pf_config=pf_cfg)
+    print("Initial World State:")
     print(world)
+
+    print("\nSimulating 10 steps with action (vx=1, vy=1)...")
+    action = Velocity(1, 1, 0)
     for i in range(10):
-        world.step(Velocity(1, 1, 0))
-    print(world)
+        world.step(action, training=True)
+        print(f"\nAfter Step {i+1}:")
+        print(world)
+
+    print("\nSimulation finished.")

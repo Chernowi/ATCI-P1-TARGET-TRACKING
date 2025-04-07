@@ -1,47 +1,41 @@
-from SAC import train_sac, evaluate_sac
-from world import World
-from configs import CONFIGS
+import argparse
+import os
 import torch
 
-if __name__ == "__main__":
-    config = CONFIGS["default"]
-    
-    # Create world using config
-    world = World(
-        dt=config.world.dt,
-        success_threshold=config.world.success_threshold
-    )
-    
-    # Check for available GPUs
+from SAC import train_sac, evaluate_sac
+from world import World
+from configs import CONFIGS, DefaultConfig
+
+def main(config_name: str):
+    """Main function to train and evaluate the SAC agent."""
+    if config_name not in CONFIGS:
+        raise ValueError(f"Unknown configuration name: {config_name}. Available: {list(CONFIGS.keys())}")
+
+    config: DefaultConfig = CONFIGS[config_name]
+    print(f"Using configuration: '{config_name}'")
+
     use_multi_gpu = torch.cuda.device_count() > 1
-    
-    # Train SAC with GPU support
+
+    os.makedirs(config.training.models_dir, exist_ok=True)
+
     print("Training SAC agent...")
-    agent, rewards = train_sac(
-        world, 
-        num_episodes=config.training.num_episodes,
-        max_steps=config.training.max_steps, 
-        batch_size=config.training.batch_size,
-        replay_buffer_size=config.training.replay_buffer_size,
-        save_interval=config.training.save_interval,
-        models_dir=config.training.models_dir,
-        success_threshold=config.training.success_threshold,
-        use_multi_gpu=use_multi_gpu  # Enable multi-GPU if available
-    )
-    
-    # Save final model
-    agent.save_model(f"{config.training.models_dir}/sac_final.pt")
-    
-    # Evaluate
+    agent, rewards = train_sac(config=config, use_multi_gpu=use_multi_gpu)
+
+    final_model_path = os.path.join(config.training.models_dir, "sac_final.pt")
+    agent.save_model(final_model_path)
+    print(f"Final model saved to {final_model_path}")
+
     print("\nEvaluating SAC agent...")
-    evaluate_sac(
-        agent, 
-        world, 
-        num_episodes=config.evaluation.num_episodes,
-        max_steps=config.evaluation.max_steps,
-        render=config.evaluation.render,
-        success_threshold=config.evaluation.success_threshold
+    evaluate_sac(agent=agent, config=config)
+
+    print(f"\nTraining and evaluation complete. Find output in the {config.visualization.save_dir} directory.")
+    print("You can convert the frames to a video using ffmpeg or view the generated GIFs.")
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Train and evaluate SAC agent for landmark tracking.")
+    parser.add_argument(
+        "--config", "-c", type=str, default="default",
+        help=f"Configuration name to use. Available: {list(CONFIGS.keys())}"
     )
-    
-    print("\nTraining complete. Find output in the world_snapshots directory.")
-    print("You can convert the frames to a video using ffmpeg.")
+    args = parser.parse_args()
+    main(config_name=args.config)
