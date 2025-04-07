@@ -104,8 +104,11 @@ class World():
             self._update_error_dist()
             self.reward = 1.0 / (self.error_dist + 1e-6) if self.error_dist != float('inf') else 0.0
             self.reward -= self.world_config.step_penalty
-            if self.error_dist < self.success_threshold: self.done, self.reward = True, self.reward + self.world_config.success_bonus
-            if measurement > self.world_config.out_of_range_threshold: self.reward -= self.world_config.out_of_range_penalty
+            if self.error_dist < self.success_threshold: 
+                self.reward += self.world_config.success_bonus
+            if measurement > self.world_config.out_of_range_threshold: 
+                self.done = True
+                self.reward -= self.world_config.out_of_range_penalty
 
     def encode_state(self) -> tuple:
         """

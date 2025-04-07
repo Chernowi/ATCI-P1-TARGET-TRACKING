@@ -6,7 +6,7 @@ import argparse
 
 def main():
     parser = argparse.ArgumentParser(description="Run SAC training with TensorBoard on Vast.ai")
-    parser.add_argument('--config', '-c', type=str, default='vast', 
+    parser.add_argument('--config', '-c', type=str, default='default', 
                         help="Configuration name to use (default: vast)")
     parser.add_argument('--port', '-p', type=int, default=6006, 
                         help="Port to use for TensorBoard (default: 6006)")
@@ -15,7 +15,7 @@ def main():
     # Start TensorBoard in background
     print(f"Starting TensorBoard server on port {args.port}...")
     tb_process = subprocess.Popen(
-        [sys.executable, "-m", "tensorboard.main", f"--logdir=runs", f"--port={args.port}", "--bind_all"],
+        [sys.executable, "-m", "tensorboard.main", f"--logdir=C:/Users/Pedro/Documents/MAI/ATCI/ATCI-P1/runs", f"--port={args.port}", "--bind_all"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE
     )

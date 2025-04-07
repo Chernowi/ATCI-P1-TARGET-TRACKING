@@ -24,7 +24,7 @@ class ReplayBufferConfig(BaseModel):
 
 class TrainingConfig(BaseModel):
     """Configuration for training"""
-    num_episodes: int = Field(1000, description="Number of episodes to train")
+    num_episodes: int = Field(10000, description="Number of episodes to train")
     max_steps: int = Field(500, description="Maximum steps per episode")
     batch_size: int = Field(256, description="Batch size for training")
     save_interval: int = Field(100, description="Interval for saving models")
