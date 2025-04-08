@@ -78,6 +78,26 @@ class World():
         dx, dy, dz = loc1.x - loc2.x, loc1.y - loc2.y, loc1.depth - loc2.depth
         return np.sqrt(dx**2 + dy**2 + dz**2)
 
+    def _get_noisy_range_measurement(self, loc1: Location, loc2: Location) -> float:
+        """
+        Calculate range measurement with distance-dependent noise.
+        The further the distance, the more noise is added.
+        """
+        true_range = self._calculate_range_measurement(loc1, loc2)
+        
+        # Base noise level plus distance-dependent component
+        base_noise = self.world_config.range_measurement_base_noise
+        distance_factor = self.world_config.range_measurement_distance_factor
+        
+        # Standard deviation of noise increases with distance
+        noise_std_dev = base_noise + distance_factor * true_range
+        
+        # Add Gaussian noise
+        noisy_range = true_range + np.random.normal(0, noise_std_dev)
+        
+        # Ensure measurement is positive
+        return max(0.1, noisy_range)
+
     def _update_error_dist(self):
         """Helper to calculate 2D distance between true and estimated landmark."""
         if self.estimated_landmark.estimated_location:
@@ -95,13 +115,22 @@ class World():
         """
         self.agent.velocity = action; self.agent.update_position(self.dt)
         self.true_landmark.update_position(self.dt)
-        measurement = self._calculate_range_measurement(self.agent.location, self.true_landmark.location)
-        self.current_range = measurement
-        has_new_range, effective_measurement = True, measurement # Assuming always valid for now
-        self.estimated_landmark.update(dt=self.dt, has_new_range=has_new_range, range_measurement=effective_measurement, observer_location=self.agent.location)
+        
+        # Get noisy range measurement
+        noisy_range = self._get_noisy_range_measurement(self.agent.location, self.true_landmark.location)
+        
+        # Store the noisy range for both state encoding and reward calculations
+        self.current_range = noisy_range
+        
+        has_new_range, effective_measurement = True, noisy_range
+        
+        self.estimated_landmark.update(dt=self.dt, has_new_range=has_new_range, 
+                                     range_measurement=effective_measurement, 
+                                     observer_location=self.agent.location)
+        
         self.reward, self.done = 0.0, False
         if training:
-            self._calculate_reward(measurement)
+            self._calculate_reward(noisy_range)  # Use noisy range for reward calculation
 
     def _calculate_reward(self, measurement: float):
         """Calculate reward based on current state and measurement."""

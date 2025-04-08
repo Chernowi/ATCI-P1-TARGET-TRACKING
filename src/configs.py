@@ -67,7 +67,7 @@ class VelocityRandomizationRange(BaseModel):
 class WorldConfig(BaseModel):
     """Configuration for the world"""
     dt: float = Field(1.0, description="Time step")
-    success_threshold: float = Field(1.5, description="Distance threshold for successful landmark detection and early termination")
+    success_threshold: float = Field(1, description="Distance threshold for successful landmark detection and early termination")
 
     agent_initial_location: Position = Field(default_factory=Position, description="Initial agent position (used if randomization is false)")
     landmark_initial_location: Position = Field(default_factory=lambda: Position(x=42, y=42, depth=42), description="Initial landmark position (used if randomization is false)")
@@ -87,6 +87,8 @@ class WorldConfig(BaseModel):
     success_bonus: float = Field(100.0, description="Bonus reward upon reaching success threshold")
     out_of_range_penalty: float = Field(100.0, description="Penalty if range exceeds threshold")
     out_of_range_threshold: float = Field(100.0, description="Range threshold for out_of_range_penalty")
+    range_measurement_base_noise: float = 0.1  # Base noise level in meters
+    range_measurement_distance_factor: float = 0.05  # Noise increases by 5% of distance
 
 
 class ParticleFilterConfig(BaseModel):
