@@ -343,6 +343,13 @@ def train_sac(config: DefaultConfig, use_multi_gpu: bool = False):
 
     episode_rewards = []
     all_losses = {'critic_loss': [], 'actor_loss': [], 'alpha': []}
+    
+    # Add timing metric tracking
+    timing_metrics = {
+        'env_step_time': [],
+        'parameter_update_time': []
+    }
+    
     pbar = tqdm(range(1, train_config.num_episodes + 1),
                 desc="Training", unit="episode")
 
@@ -353,12 +360,22 @@ def train_sac(config: DefaultConfig, use_multi_gpu: bool = False):
         episode_reward = 0
         episode_steps = 0
         episode_transitions = []
+        
+        # Timing metrics for this episode
+        episode_step_times = []
+        episode_param_update_times = []
 
         for step in range(train_config.max_steps):
             action_scaled = agent.select_action(state, evaluate=False)
             action_obj = Velocity(
                 x=action_scaled[0], y=action_scaled[1], z=0.0)
+            
+            # Measure environment step time
+            step_start_time = time.time()
             env.step(action_obj, training=True)
+            step_time = time.time() - step_start_time
+            episode_step_times.append(step_time)
+            
             reward = env.reward
             next_state = env.encode_state()
             done = env.done
@@ -378,8 +395,13 @@ def train_sac(config: DefaultConfig, use_multi_gpu: bool = False):
         update_count = 0
         if len(memory) >= train_config.batch_size:
             for _ in range(num_updates):
+                # Measure parameter update time
+                update_start_time = time.time()
                 losses = agent.update_parameters(
                     memory, train_config.batch_size)
+                update_time = time.time() - update_start_time
+                episode_param_update_times.append(update_time)
+                
                 if losses:
                     episode_avg_losses['critic_loss'] += losses['critic_loss']
                     episode_avg_losses['actor_loss'] += losses['actor_loss']
@@ -396,10 +418,22 @@ def train_sac(config: DefaultConfig, use_multi_gpu: bool = False):
 
         episode_rewards.append(episode_reward)
         
+        # Calculate average timing metrics for this episode
+        if episode_step_times:
+            avg_step_time = np.mean(episode_step_times)
+            timing_metrics['env_step_time'].append(avg_step_time)
+            writer.add_scalar('Time/Environment_Step_ms', avg_step_time * 1000, episode)
+        
+        if episode_param_update_times:
+            avg_param_update_time = np.mean(episode_param_update_times)
+            timing_metrics['parameter_update_time'].append(avg_param_update_time)
+            writer.add_scalar('Time/Parameter_Update_ms', avg_param_update_time * 1000, episode)
+        
         # Log metrics to TensorBoard
         writer.add_scalar('Reward/Episode', episode_reward, episode)
         writer.add_scalar('Steps/Episode', episode_steps, episode)
         writer.add_scalar('Error/Distance', env.error_dist, episode)
+        writer.add_scalar('Time/Particle_Filter_ms', env.pf_update_time * 1000, episode)
         
         if update_count > 0:
             writer.add_scalar('Loss/Critic', episode_avg_losses['critic_loss'], episode)
@@ -421,6 +455,12 @@ def train_sac(config: DefaultConfig, use_multi_gpu: bool = False):
             save_path = os.path.join(
                 train_config.models_dir, f"sac_ep{episode}.pt")
             agent.save_model(save_path)
+
+        # Log hyperparameters to tensorboard
+        writer.add_hparams(
+            {"n_steps": sac_config.n_steps, "lr": sac_config.lr, "gamma": sac_config.gamma},
+            {"hparam/avg_reward": np.mean(episode_rewards[-10:])}
+        )
 
     pbar.close()
     writer.close()

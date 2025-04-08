@@ -3,6 +3,7 @@ from world_objects import Object, Location, Velocity
 from configs import WorldConfig, ParticleFilterConfig
 import numpy as np
 import random
+import time
 
 class World():
     """
@@ -72,6 +73,7 @@ class World():
         self.error_dist = float('inf')
         self.done = False
         self._update_error_dist()
+        self.pf_update_time = 0.0  # Track particle filter update time
 
     def _calculate_range_measurement(self, loc1: Location, loc2: Location) -> float:
         """Helper function for range measurement (3D slant range)."""
@@ -124,9 +126,12 @@ class World():
         
         has_new_range, effective_measurement = True, noisy_range
         
+        # Measure particle filter update time
+        pf_start_time = time.time()
         self.estimated_landmark.update(dt=self.dt, has_new_range=has_new_range, 
                                      range_measurement=effective_measurement, 
                                      observer_location=self.agent.location)
+        self.pf_update_time = time.time() - pf_start_time
         
         self.reward, self.done = 0.0, False
         if training:

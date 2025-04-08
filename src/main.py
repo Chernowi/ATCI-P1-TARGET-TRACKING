@@ -32,7 +32,8 @@ def main(config_name: str, use_n_step: bool = False, cuda_device: str = None):
     else:
         agent, _ = train_sac(config=config, use_multi_gpu=use_multi_gpu)
 
-    final_model_path = os.path.join(config.training.models_dir, "sac_final.pt")
+    final_model_path = os.path.join(config.training.models_dir, 
+                                   "nstep_sac_final.pt" if use_n_step else "sac_final.pt")
     agent.save_model(final_model_path)
     print(f"Final model saved to {final_model_path}")
 
