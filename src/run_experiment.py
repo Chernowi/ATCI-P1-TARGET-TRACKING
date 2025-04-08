@@ -35,11 +35,15 @@ def run_experiment(config_name: str, model_path: str, num_episodes: int, max_ste
     if render is not None:
         config.evaluation.render = render
 
+    # Get configured device
+    device = torch.device(config.cuda_device if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+    
     # Create the appropriate agent type
     if use_n_step:
-        agent = NStepSAC(config=config.sac)
+        agent = NStepSAC(config=config.sac, device=device)
     else:
-        agent = SAC(config=config.sac)
+        agent = SAC(config=config.sac, device=device)
 
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"Model file not found: {model_path}")

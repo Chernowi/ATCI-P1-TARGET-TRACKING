@@ -128,6 +128,7 @@ class DefaultConfig(BaseModel):
     world: WorldConfig = Field(default_factory=WorldConfig, description="World configuration")
     particle_filter: ParticleFilterConfig = Field(default_factory=ParticleFilterConfig, description="Particle filter configuration")
     visualization: VisualizationConfig = Field(default_factory=VisualizationConfig, description="Visualization configuration")
+    cuda_device: str = Field("cpu", description="CUDA device to use (e.g., 'cuda:0', 'cuda:1', 'cpu')")
 
 
 default_config = DefaultConfig()

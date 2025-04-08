@@ -310,7 +310,8 @@ def train_sac(config: DefaultConfig, use_multi_gpu: bool = False):
     train_config = config.training
     buffer_config = config.replay_buffer
     world_config = config.world
-    pf_config = config.particle_filter  # Needed for World initialization
+    pf_config = config.particle_filter
+    cuda_device = config.cuda_device  # Get the configured CUDA device
 
     # Create logs directory for TensorBoard
     log_dir = os.path.join("runs", f"sac_training_{int(time.time())}")
@@ -321,12 +322,16 @@ def train_sac(config: DefaultConfig, use_multi_gpu: bool = False):
 
     if torch.cuda.is_available():
         if use_multi_gpu and torch.cuda.device_count() > 1:
-            print(
-                f"Using {torch.cuda.device_count()} GPUs for training (Note: SAC updates are often sequential)")
+            print(f"Using {torch.cuda.device_count()} GPUs for training (Note: SAC updates are often sequential)")
             device = torch.device("cuda")
         else:
-            device = torch.device("cuda:0")
-            print(f"Using 1 GPU for training: {torch.cuda.get_device_name(0)}")
+            # Use the configured CUDA device
+            device = torch.device(cuda_device)
+            print(f"Using device: {device}")
+            if 'cuda' in cuda_device and not cuda_device == 'cuda':
+                device_idx = int(cuda_device.split(':')[1])
+                if 0 <= device_idx < torch.cuda.device_count():
+                    print(f"GPU: {torch.cuda.get_device_name(device_idx)}")
     else:
         device = torch.device("cpu")
         print("GPU not available, using CPU for training")

@@ -7,7 +7,7 @@ from nStepSAC import train_n_step_sac, evaluate_n_step_sac, NStepSAC
 from configs import CONFIGS, DefaultConfig
 
 
-def main(config_name: str, use_n_step: bool = False):
+def main(config_name: str, use_n_step: bool = False, cuda_device: str = None):
     """Main function to train and evaluate the SAC agent."""
     if config_name not in CONFIGS:
         raise ValueError(
@@ -16,7 +16,12 @@ def main(config_name: str, use_n_step: bool = False):
     config: DefaultConfig = CONFIGS[config_name]
     print(f"Using configuration: '{config_name}'")
     print(f"Using {'N-Step SAC' if use_n_step else 'regular SAC'} implementation")
-
+    
+    # Override CUDA device if specified
+    if cuda_device:
+        config.cuda_device = cuda_device
+        print(f"Using CUDA device: {cuda_device}")
+        
     use_multi_gpu = torch.cuda.device_count() > 1
 
     os.makedirs(config.training.models_dir, exist_ok=True)
@@ -53,5 +58,9 @@ if __name__ == "__main__":
         "--n-step", action="store_true",
         help="Use N-Step SAC implementation"
     )
+    parser.add_argument(
+        "--device", "-d", type=str, default=None,
+        help="CUDA device to use (e.g., 'cuda:0', 'cuda:1', 'cpu')"
+    )
     args = parser.parse_args()
-    main(config_name=args.config, use_n_step=args.n_step)
+    main(config_name=args.config, use_n_step=args.n_step, cuda_device=args.device)

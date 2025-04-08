@@ -10,6 +10,8 @@ def main():
                         help="Configuration name to use (default: vast)")
     parser.add_argument('--port', '-p', type=int, default=6006, 
                         help="Port to use for TensorBoard (default: 6006)")
+    parser.add_argument('--device', '-d', type=str, default=None,
+                        help="CUDA device to use (e.g., 'cuda:0', 'cuda:1', 'cpu')")
     args = parser.parse_args()
     
     # Start TensorBoard in background
@@ -32,9 +34,11 @@ def main():
     print(f"TensorBoard running on port {args.port}. Access via Vast.ai port forwarding.")
     
     try:
-        # Start training
+        # Start training with device option
         print(f"Starting training with config: {args.config}")
         train_cmd = [sys.executable, "src/main.py", f"--config={args.config}"]
+        if args.device:
+            train_cmd.extend(["--device", args.device])
         subprocess.run(train_cmd)
     finally:
         # Cleanup
