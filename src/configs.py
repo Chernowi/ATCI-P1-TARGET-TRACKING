@@ -15,11 +15,14 @@ class SACConfig(BaseModel):
     tau: float = Field(0.005, description="Target network update rate")
     alpha: float = Field(0.005, description="Temperature parameter")
     auto_tune_alpha: bool = Field(True, description="Whether to auto-tune the alpha parameter")
+    n_steps: int = Field(4, description="Number of steps for n-step returns (1 for regular SAC)")
 
 
 class ReplayBufferConfig(BaseModel):
     """Configuration for the replay buffer"""
     capacity: int = Field(100000, description="Maximum capacity of replay buffer")
+    n_steps: int = Field(4, description="Number of steps for n-step returns (1 for regular SAC)")
+    gamma: float = Field(0.99, description="Discount factor for n-step returns")
 
 
 class TrainingConfig(BaseModel):

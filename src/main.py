@@ -3,10 +3,11 @@ import os
 import torch
 
 from SAC import train_sac, evaluate_sac
+from nStepSAC import train_n_step_sac, evaluate_n_step_sac, NStepSAC
 from configs import CONFIGS, DefaultConfig
 
 
-def main(config_name: str):
+def main(config_name: str, use_n_step: bool = False):
     """Main function to train and evaluate the SAC agent."""
     if config_name not in CONFIGS:
         raise ValueError(
@@ -14,20 +15,27 @@ def main(config_name: str):
 
     config: DefaultConfig = CONFIGS[config_name]
     print(f"Using configuration: '{config_name}'")
+    print(f"Using {'N-Step SAC' if use_n_step else 'regular SAC'} implementation")
 
     use_multi_gpu = torch.cuda.device_count() > 1
 
     os.makedirs(config.training.models_dir, exist_ok=True)
 
     print("Training SAC agent...")
-    agent, _ = train_sac(config=config, use_multi_gpu=use_multi_gpu)
+    if use_n_step:
+        agent, _ = train_n_step_sac(config=config, use_multi_gpu=use_multi_gpu)
+    else:
+        agent, _ = train_sac(config=config, use_multi_gpu=use_multi_gpu)
 
     final_model_path = os.path.join(config.training.models_dir, "sac_final.pt")
     agent.save_model(final_model_path)
     print(f"Final model saved to {final_model_path}")
 
     print("\nEvaluating SAC agent...")
-    evaluate_sac(agent=agent, config=config)
+    if use_n_step:
+        evaluate_n_step_sac(agent=agent, config=config)
+    else:
+        evaluate_sac(agent=agent, config=config)
 
     print(
         f"\nTraining and evaluation complete. Find output in the {config.visualization.save_dir} directory.")
@@ -41,5 +49,9 @@ if __name__ == "__main__":
         "--config", "-c", type=str, default="default",
         help=f"Configuration name to use. Available: {list(CONFIGS.keys())}"
     )
+    parser.add_argument(
+        "--n-step", action="store_true",
+        help="Use N-Step SAC implementation"
+    )
     args = parser.parse_args()
-    main(config_name=args.config)
+    main(config_name=args.config, use_n_step=args.n_step)
