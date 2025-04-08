@@ -6,26 +6,26 @@ class SACConfig(BaseModel):
     """Configuration for the SAC agent"""
     state_dim: int = Field(8, description="State dimension (agent_x, agent_y, agent_vx, agent_vy, landmark_x, landmark_y, landmark_depth, current_range)")
     action_dim: int = Field(2, description="Action dimension (vx, vy)")
-    action_scale: float = Field(8.0, description="Scale actions to reasonable velocity range")
+    action_scale: float = Field(1, description="Scale actions to reasonable velocity range")
     hidden_dim: int = Field(256, description="Hidden layer dimension")
     log_std_min: int = Field(-20, description="Minimum log std for action distribution")
     log_std_max: int = Field(2, description="Maximum log std for action distribution")
     lr: float = Field(3e-4, description="Learning rate")
     gamma: float = Field(0.99, description="Discount factor")
     tau: float = Field(0.005, description="Target network update rate")
-    alpha: float = Field(0.2, description="Temperature parameter")
+    alpha: float = Field(0.005, description="Temperature parameter")
     auto_tune_alpha: bool = Field(True, description="Whether to auto-tune the alpha parameter")
 
 
 class ReplayBufferConfig(BaseModel):
     """Configuration for the replay buffer"""
-    capacity: int = Field(1000000, description="Maximum capacity of replay buffer")
+    capacity: int = Field(100000, description="Maximum capacity of replay buffer")
 
 
 class TrainingConfig(BaseModel):
     """Configuration for training"""
-    num_episodes: int = Field(1000, description="Number of episodes to train")
-    max_steps: int = Field(500, description="Maximum steps per episode")
+    num_episodes: int = Field(200, description="Number of episodes to train")
+    max_steps: int = Field(400, description="Maximum steps per episode")
     batch_size: int = Field(256, description="Batch size for training")
     save_interval: int = Field(100, description="Interval for saving models")
     models_dir: str = Field("sac_models", description="Directory for saving models")
@@ -67,7 +67,7 @@ class VelocityRandomizationRange(BaseModel):
 class WorldConfig(BaseModel):
     """Configuration for the world"""
     dt: float = Field(1.0, description="Time step")
-    success_threshold: float = Field(2.0, description="Distance threshold for successful landmark detection and early termination")
+    success_threshold: float = Field(1.5, description="Distance threshold for successful landmark detection and early termination")
 
     agent_initial_location: Position = Field(default_factory=Position, description="Initial agent position (used if randomization is false)")
     landmark_initial_location: Position = Field(default_factory=lambda: Position(x=42, y=42, depth=42), description="Initial landmark position (used if randomization is false)")
@@ -83,10 +83,10 @@ class WorldConfig(BaseModel):
     landmark_randomization_ranges: RandomizationRange = Field(default_factory=RandomizationRange, description="Ranges for landmark location randomization")
     landmark_velocity_randomization_ranges: VelocityRandomizationRange = Field(default_factory=VelocityRandomizationRange, description="Ranges for landmark velocity randomization")
 
-    step_penalty: float = Field(0.001, description="Penalty subtracted each step")
+    step_penalty: float = Field(0.1, description="Penalty subtracted each step")
     success_bonus: float = Field(100.0, description="Bonus reward upon reaching success threshold")
     out_of_range_penalty: float = Field(100.0, description="Penalty if range exceeds threshold")
-    out_of_range_threshold: float = Field(70.0, description="Range threshold for out_of_range_penalty")
+    out_of_range_threshold: float = Field(100.0, description="Range threshold for out_of_range_penalty")
 
 
 class ParticleFilterConfig(BaseModel):

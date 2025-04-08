@@ -101,12 +101,36 @@ class World():
         self.estimated_landmark.update(dt=self.dt, has_new_range=has_new_range, range_measurement=effective_measurement, observer_location=self.agent.location)
         self.reward, self.done = 0.0, False
         if training:
-            self._update_error_dist()
-            self.reward = 1.0 / (self.error_dist + 1e-6) if self.error_dist != float('inf') else 0.0
-            self.reward -= self.world_config.step_penalty
-            if self.error_dist < self.success_threshold: self.done, self.reward = True, self.reward + self.world_config.success_bonus
-            if measurement > self.world_config.out_of_range_threshold: self.reward -= self.world_config.out_of_range_penalty
+            self._calculate_reward(measurement)
 
+    def _calculate_reward(self, measurement: float):
+        """Calculate reward based on current state and measurement."""
+        self._update_error_dist()
+        
+        # Use a bounded reward for error distance (tanh gives values between -1 and 1)
+        # Multiply by a scale factor to get desired reward magnitude
+        error_scale = 10.0
+        if self.error_dist != float('inf'):
+            # Lower error = higher reward (negative sign inverts the relationship)
+            self.reward = error_scale * (1.0 - np.tanh(self.error_dist / 10.0))
+        else:
+            self.reward = 0.0
+            
+        # Penalty for each step
+        self.reward -= self.world_config.step_penalty
+        
+        # Handle out of range condition
+        if measurement > self.world_config.out_of_range_threshold:
+            self.done = True
+            self.reward -= self.world_config.out_of_range_penalty
+        else:
+            # Encourage getting closer to the target using a bounded reward function
+            closeness_reward = 5.0 * (1.0 - np.tanh(measurement / 20.0))
+            self.reward += closeness_reward
+        
+        # Clip reward to reasonable bounds
+        self.reward = np.clip(self.reward, -100.0, 100.0)
+    
     def encode_state(self) -> tuple:
         """
         Encodes the current state for the RL agent.

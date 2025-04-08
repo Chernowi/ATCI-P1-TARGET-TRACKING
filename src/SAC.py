@@ -6,13 +6,15 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torch.distributions import Normal
 import random
+import time
 from collections import deque
 from tqdm import tqdm
 from world import World
 from world_objects import Velocity
 from visualization import visualize_world, reset_trajectories, save_gif, create_gif_from_files
 from configs import DefaultConfig, ReplayBufferConfig, SACConfig
-
+# Add TensorBoard import
+from torch.utils.tensorboard import SummaryWriter
 
 class ReplayBuffer:
     """Experience replay buffer to store and sample transitions."""
@@ -310,6 +312,13 @@ def train_sac(config: DefaultConfig, use_multi_gpu: bool = False):
     world_config = config.world
     pf_config = config.particle_filter  # Needed for World initialization
 
+    # Create logs directory for TensorBoard
+    log_dir = os.path.join("runs", f"sac_training_{int(time.time())}")
+    os.makedirs(log_dir, exist_ok=True)
+    writer = SummaryWriter(log_dir=log_dir)
+    print(f"TensorBoard logs will be saved to: {log_dir}")
+    print("To view logs, run: tensorboard --logdir=runs")
+
     if torch.cuda.is_available():
         if use_multi_gpu and torch.cuda.device_count() > 1:
             print(
@@ -381,10 +390,21 @@ def train_sac(config: DefaultConfig, use_multi_gpu: bool = False):
                 all_losses['alpha'].append(episode_avg_losses['alpha'])
 
         episode_rewards.append(episode_reward)
+        
+        # Log metrics to TensorBoard
+        writer.add_scalar('Reward/Episode', episode_reward, episode)
+        writer.add_scalar('Steps/Episode', episode_steps, episode)
+        writer.add_scalar('Error/Distance', env.error_dist, episode)
+        
+        if update_count > 0:
+            writer.add_scalar('Loss/Critic', episode_avg_losses['critic_loss'], episode)
+            writer.add_scalar('Loss/Actor', episode_avg_losses['actor_loss'], episode)
+            writer.add_scalar('Alpha/Value', episode_avg_losses['alpha'], episode)
 
         if episode % 10 == 0:
             lookback = min(10, episode)
             avg_reward = np.mean(episode_rewards[-lookback:])
+            writer.add_scalar('Reward/Average_10', avg_reward, episode)
             pbar_postfix = {'avg_reward': f'{avg_reward:.2f}'}
             if update_count > 0:
                 pbar_postfix['crit_loss'] = f"{episode_avg_losses['critic_loss']:.3f}"
@@ -398,6 +418,7 @@ def train_sac(config: DefaultConfig, use_multi_gpu: bool = False):
             agent.save_model(save_path)
 
     pbar.close()
+    writer.close()
     return agent, episode_rewards
 
 
