@@ -28,9 +28,10 @@ class ReplayBufferConfig(BaseModel):
 class TrainingConfig(BaseModel):
     """Configuration for training"""
     num_episodes: int = Field(200, description="Number of episodes to train")
-    max_steps: int = Field(400, description="Maximum steps per episode")
+    max_steps: int = Field(250, description="Maximum steps per episode")
     batch_size: int = Field(256, description="Batch size for training")
     save_interval: int = Field(100, description="Interval for saving models")
+    log_frequency: int = Field(1, description="Frequency (in steps) for logging to TensorBoard")
     models_dir: str = Field("sac_models", description="Directory for saving models")
 
 
@@ -70,7 +71,7 @@ class VelocityRandomizationRange(BaseModel):
 class WorldConfig(BaseModel):
     """Configuration for the world"""
     dt: float = Field(1.0, description="Time step")
-    success_threshold: float = Field(1, description="Distance threshold for successful landmark detection and early termination")
+    success_threshold: float = Field(0.5, description="Distance threshold for successful landmark detection and early termination")
 
     agent_initial_location: Position = Field(default_factory=Position, description="Initial agent position (used if randomization is false)")
     landmark_initial_location: Position = Field(default_factory=lambda: Position(x=42, y=42, depth=42), description="Initial landmark position (used if randomization is false)")

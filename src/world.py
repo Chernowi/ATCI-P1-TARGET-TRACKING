@@ -143,7 +143,7 @@ class World():
         
         # Use a bounded reward for error distance (tanh gives values between -1 and 1)
         # Multiply by a scale factor to get desired reward magnitude
-        error_scale = 10.0
+        error_scale = 5.0
         if self.error_dist != float('inf'):
             # Lower error = higher reward (negative sign inverts the relationship)
             self.reward = error_scale * (1.0 - np.tanh(self.error_dist / 10.0))

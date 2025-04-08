@@ -365,28 +365,32 @@ def train_n_step_sac(config, use_multi_gpu=False):
         if episode_step_times:
             avg_step_time = np.mean(episode_step_times)
             timing_metrics['env_step_time'].append(avg_step_time)
-            writer.add_scalar('Time/Environment_Step_ms', avg_step_time * 1000, episode)
+            if episode % train_config.log_frequency == 0:
+                writer.add_scalar('Time/Environment_Step_ms', avg_step_time * 1000, episode)
         
         if episode_param_update_times:
             avg_param_update_time = np.mean(episode_param_update_times)
             timing_metrics['parameter_update_time'].append(avg_param_update_time)
-            writer.add_scalar('Time/Parameter_Update_ms', avg_param_update_time * 1000, episode)
+            if episode % train_config.log_frequency == 0:
+                writer.add_scalar('Time/Parameter_Update_ms', avg_param_update_time * 1000, episode)
         
-        # Log metrics to TensorBoard
-        writer.add_scalar('Reward/Episode', episode_reward, episode)
-        writer.add_scalar('Steps/Episode', episode_steps, episode)
-        writer.add_scalar('Error/Distance', env.error_dist, episode)
-        writer.add_scalar('Time/Particle_Filter_ms', env.pf_update_time * 1000, episode)
-        
-        if update_count > 0:
-            writer.add_scalar('Loss/Critic', episode_avg_losses['critic_loss'], episode)
-            writer.add_scalar('Loss/Actor', episode_avg_losses['actor_loss'], episode)
-            writer.add_scalar('Alpha/Value', episode_avg_losses['alpha'], episode)
+        # Log metrics to TensorBoard at reduced frequency
+        if episode % train_config.log_frequency == 0:
+            writer.add_scalar('Reward/Episode', episode_reward, episode)
+            writer.add_scalar('Steps/Episode', episode_steps, episode)
+            writer.add_scalar('Error/Distance', env.error_dist, episode)
+            writer.add_scalar('Time/Particle_Filter_ms', env.pf_update_time * 1000, episode)
+            
+            if update_count > 0:
+                writer.add_scalar('Loss/Critic', episode_avg_losses['critic_loss'], episode)
+                writer.add_scalar('Loss/Actor', episode_avg_losses['actor_loss'], episode)
+                writer.add_scalar('Alpha/Value', episode_avg_losses['alpha'], episode)
 
         if episode % 10 == 0:
             lookback = min(10, episode)
             avg_reward = np.mean(episode_rewards[-lookback:])
-            writer.add_scalar('Reward/Average_10', avg_reward, episode)
+            if episode % train_config.log_frequency == 0:
+                writer.add_scalar('Reward/Average_10', avg_reward, episode)
             pbar_postfix = {'avg_reward': f'{avg_reward:.2f}'}
             if update_count > 0:
                 pbar_postfix['crit_loss'] = f"{episode_avg_losses['critic_loss']:.3f}"
@@ -397,12 +401,6 @@ def train_n_step_sac(config, use_multi_gpu=False):
         if episode % train_config.save_interval == 0:
             save_path = os.path.join(train_config.models_dir, f"nstep_sac_ep{episode}.pt")
             agent.save_model(save_path)
-            
-        # Log hyperparameters to tensorboard
-        writer.add_hparams(
-            {"n_steps": sac_config.n_steps, "lr": sac_config.lr, "gamma": sac_config.gamma},
-            {"hparam/avg_reward": np.mean(episode_rewards[-10:])}
-        )
 
     pbar.close()
     writer.close()
