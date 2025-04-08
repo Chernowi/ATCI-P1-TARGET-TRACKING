@@ -13,7 +13,7 @@ class SACConfig(BaseModel):
     lr: float = Field(3e-4, description="Learning rate")
     gamma: float = Field(0.99, description="Discount factor")
     tau: float = Field(0.005, description="Target network update rate")
-    alpha: float = Field(0.1, description="Temperature parameter")
+    alpha: float = Field(0.005, description="Temperature parameter")
     auto_tune_alpha: bool = Field(True, description="Whether to auto-tune the alpha parameter")
 
 
@@ -24,8 +24,8 @@ class ReplayBufferConfig(BaseModel):
 
 class TrainingConfig(BaseModel):
     """Configuration for training"""
-    num_episodes: int = Field(1000, description="Number of episodes to train")
-    max_steps: int = Field(500, description="Maximum steps per episode")
+    num_episodes: int = Field(200, description="Number of episodes to train")
+    max_steps: int = Field(400, description="Maximum steps per episode")
     batch_size: int = Field(256, description="Batch size for training")
     save_interval: int = Field(100, description="Interval for saving models")
     models_dir: str = Field("sac_models", description="Directory for saving models")
@@ -67,7 +67,7 @@ class VelocityRandomizationRange(BaseModel):
 class WorldConfig(BaseModel):
     """Configuration for the world"""
     dt: float = Field(1.0, description="Time step")
-    success_threshold: float = Field(2.5, description="Distance threshold for successful landmark detection and early termination")
+    success_threshold: float = Field(1.5, description="Distance threshold for successful landmark detection and early termination")
 
     agent_initial_location: Position = Field(default_factory=Position, description="Initial agent position (used if randomization is false)")
     landmark_initial_location: Position = Field(default_factory=lambda: Position(x=42, y=42, depth=42), description="Initial landmark position (used if randomization is false)")
@@ -86,7 +86,7 @@ class WorldConfig(BaseModel):
     step_penalty: float = Field(0.1, description="Penalty subtracted each step")
     success_bonus: float = Field(100.0, description="Bonus reward upon reaching success threshold")
     out_of_range_penalty: float = Field(100.0, description="Penalty if range exceeds threshold")
-    out_of_range_threshold: float = Field(70.0, description="Range threshold for out_of_range_penalty")
+    out_of_range_threshold: float = Field(100.0, description="Range threshold for out_of_range_penalty")
 
 
 class ParticleFilterConfig(BaseModel):

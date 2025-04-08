@@ -3,7 +3,6 @@ import os
 import torch
 
 from SAC import train_sac, evaluate_sac
-from world import World
 from configs import CONFIGS, DefaultConfig
 
 
@@ -21,7 +20,7 @@ def main(config_name: str):
     os.makedirs(config.training.models_dir, exist_ok=True)
 
     print("Training SAC agent...")
-    agent, rewards = train_sac(config=config, use_multi_gpu=use_multi_gpu)
+    agent, _ = train_sac(config=config, use_multi_gpu=use_multi_gpu)
 
     final_model_path = os.path.join(config.training.models_dir, "sac_final.pt")
     agent.save_model(final_model_path)
