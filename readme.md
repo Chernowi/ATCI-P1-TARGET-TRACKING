@@ -86,7 +86,3 @@ See hyperparameter_guide.md for detailed explanations of hyperparameters.
 ## Acknowledgments
 
 The particle filter implementation is based on the work by Ivan Masmitja Rusinol.
-
-## License
-
-[Include license information here]
