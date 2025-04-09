@@ -82,8 +82,8 @@ class World():
 
     def _calculate_range_measurement(self, loc1: Location, loc2: Location) -> float:
         """Helper function for range measurement (3D slant range)."""
-        dx, dy, dz = loc1.x - loc2.x, loc1.y - loc2.y, loc1.depth - loc2.depth
-        return np.sqrt(dx**2 + dy**2 + dz**2)
+        dx, dy = loc1.x - loc2.x, loc1.y - loc2.y
+        return np.sqrt(dx**2 + dy**2)
 
     def _get_noisy_range_measurement(self, loc1: Location, loc2: Location) -> float:
         """
