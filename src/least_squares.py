@@ -1,5 +1,6 @@
+from typing import Optional, List, Dict, Any
 import numpy as np
-from typing import Optional, List
+
 from world_objects import Location, Velocity
 from configs import LeastSquaresConfig
 
@@ -176,3 +177,60 @@ class TrackedTargetLS:
     def _calculate_distance(self, loc1: Location, loc2: Location) -> float:
         """Helper to calculate distance between two locations."""
         return ((loc1.x - loc2.x)**2 + (loc1.y - loc2.y)**2)**0.5
+
+    def encode_state(self) -> Dict[str, Any]:
+        """
+        Encodes the internal state of the least squares estimator.
+        
+        Returns:
+            Dictionary containing the serialized state
+        """
+        state = {
+            "is_initialized": self._is_initialized,
+            "current_timestamp": self._current_timestamp,
+            "observer_locations": [(loc.x, loc.y, loc.depth) for loc in self._observer_locations],
+            "range_measurements": self._range_measurements.copy(),
+            "position_history": [(pos.x, pos.y, pos.depth) for pos in self._position_history],
+            "timestamp_history": self._timestamp_history.copy(),
+        }
+        
+        # Include estimated location and velocity if available
+        if self.estimated_location is not None:
+            state["estimated_location"] = (self.estimated_location.x, self.estimated_location.y, self.estimated_location.depth)
+        
+        if self.estimated_velocity is not None:
+            state["estimated_velocity"] = (self.estimated_velocity.x, self.estimated_velocity.y, self.estimated_velocity.z)
+            
+        return state
+    
+    def decode_state(self, state_dict: Dict[str, Any]) -> None:
+        """
+        Restores the internal state of the least squares estimator.
+        
+        Args:
+            state_dict: Dictionary containing the serialized state
+        """
+        # Restore simple variables
+        self._is_initialized = state_dict.get("is_initialized", False)
+        self._current_timestamp = state_dict.get("current_timestamp", 0.0)
+        
+        # Restore collections
+        self._observer_locations = [Location(x=x, y=y, depth=z) 
+                                   for x, y, z in state_dict.get("observer_locations", [])]
+        self._range_measurements = state_dict.get("range_measurements", [])
+        self._position_history = [Location(x=x, y=y, depth=z) 
+                                 for x, y, z in state_dict.get("position_history", [])]
+        self._timestamp_history = state_dict.get("timestamp_history", [])
+        
+        # Restore estimated location and velocity
+        if "estimated_location" in state_dict:
+            x, y, depth = state_dict["estimated_location"]
+            self.estimated_location = Location(x=x, y=y, depth=depth)
+        else:
+            self.estimated_location = None
+            
+        if "estimated_velocity" in state_dict:
+            x, y, z = state_dict["estimated_velocity"]
+            self.estimated_velocity = Velocity(x=x, y=y, z=z)
+        else:
+            self.estimated_velocity = None

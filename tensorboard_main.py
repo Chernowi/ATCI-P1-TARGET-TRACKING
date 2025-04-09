@@ -1,4 +1,3 @@
-import os
 import subprocess
 import sys
 import time
@@ -12,12 +11,14 @@ def main():
                         help="Port to use for TensorBoard (default: 6006)")
     parser.add_argument('--device', '-d', type=str, default=None,
                         help="CUDA device to use (e.g., 'cuda:0', 'cuda:1', 'cpu')")
+    parser.add_argument('--logs', '-l', type=str, default='C:/Users/Pedro/Documents/MAI/ATCI/ATCI-P1/runs',
+                        help="Directory for TensorBoard logs (default: 'runs')")
     args = parser.parse_args()
     
     # Start TensorBoard in background
     print(f"Starting TensorBoard server on port {args.port}...")
     tb_process = subprocess.Popen(
-        [sys.executable, "-m", "tensorboard.main", f"--logdir=C:/Users/Pedro/Documents/MAI/ATCI/ATCI-P1/runs", f"--port={args.port}", "--bind_all"],
+        [sys.executable, "-m", "tensorboard.main", f"--logdir={args.logs}", f"--port={args.port}", "--bind_all"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE
     )

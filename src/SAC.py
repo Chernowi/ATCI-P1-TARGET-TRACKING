@@ -172,7 +172,9 @@ class SAC:
 
     def select_action(self, state, evaluate=False):
         """Select action based on state."""
-        state = torch.FloatTensor(state).to(self.device).unsqueeze(0)
+        state_tuple = state['basic_state']
+            
+        state = torch.FloatTensor(state_tuple).to(self.device).unsqueeze(0)
         with torch.no_grad():
             if evaluate:
                 _, _, action_mean_squashed = self.actor.sample(state)
@@ -190,8 +192,12 @@ class SAC:
         if len(memory) < batch_size:
             return None
 
-        state_batch, action_batch_scaled, reward_batch, next_state_batch, done_batch = memory.sample(
+        state_batch_dict, action_batch_scaled, reward_batch, next_state_batch_dict, done_batch = memory.sample(
             batch_size)
+
+        # Extract basic_state tuples from dictionaries
+        state_batch = np.array([s['basic_state'] for s in state_batch_dict])
+        next_state_batch = np.array([s['basic_state'] for s in next_state_batch_dict])
 
         state_batch = torch.FloatTensor(state_batch).to(self.device)
         # Rescale actions back to [-1, 1] for network input
@@ -467,7 +473,6 @@ def evaluate_sac(agent: SAC, config: DefaultConfig):
     eval_config = config.evaluation
     world_config = config.world
     vis_config = config.visualization
-    pf_config = config.particle_filter  # Needed for World initialization
 
     eval_rewards = []
     success_count = 0
@@ -553,13 +558,13 @@ def evaluate_sac(agent: SAC, config: DefaultConfig):
     avg_eval_reward = np.mean(eval_rewards) if eval_rewards else 0
     success_rate = success_count / \
         eval_config.num_episodes if eval_config.num_episodes > 0 else 0
-    print(f"\n--- Evaluation Summary ---")
+    print("\n--- Evaluation Summary ---")
     print(f"Average Evaluation Reward: {avg_eval_reward:.2f}")
     print(
         f"Success Rate: {success_rate:.2f} ({success_count}/{eval_config.num_episodes})")
     if eval_config.render:
         print(
             f"Individual episode GIFs saved in the '{os.path.abspath(vis_config.save_dir)}' directory.")
-    print(f"--- End Evaluation ---")
+    print("--- End Evaluation ---")
 
     return eval_rewards

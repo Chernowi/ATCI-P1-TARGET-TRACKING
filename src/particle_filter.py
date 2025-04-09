@@ -4,10 +4,10 @@ Original Author: Ivan Masmitja Rusinol (March 29, 2020)
 Refactored for clarity and integration with world_objects.
 Project: AIforUTracking / Refactoring Exercise
 """
-
-import numpy as np
+from typing import List, Optional, Dict, Any
 import random
-from typing import List, Optional
+import numpy as np
+
 from world_objects import Location, Velocity
 from configs import ParticleFilterConfig
 
@@ -591,3 +591,85 @@ class TrackedTargetPF:
         ])
         self.ls_state_history.append(current_ls_state)
         return True
+
+    def encode_state(self) -> Dict[str, Any]:
+        """
+        Encodes the internal state of the particle filter.
+        
+        Returns:
+            Dictionary containing the serialized state
+        """
+        state = {
+            "is_initialized": self.pf_core.is_initialized,
+            "particles_state": self.pf_core.particles_state.tolist() if self.pf_core.particles_state is not None else None,
+            "weights": self.pf_core.weights.tolist() if self.pf_core.weights is not None else None,
+            "position_covariance_matrix": self.pf_core.position_covariance_matrix.tolist() if hasattr(self.pf_core, "position_covariance_matrix") else None,
+            "position_covariance_eigenvalues": self.pf_core.position_covariance_eigenvalues.tolist() if hasattr(self.pf_core, "position_covariance_eigenvalues") else None,
+            "position_covariance_orientation": self.pf_core.position_covariance_orientation if hasattr(self.pf_core, "position_covariance_orientation") else 0.0,
+        }
+        
+        # Include estimated location and velocity if available
+        if self.estimated_location is not None:
+            state["estimated_location"] = (self.estimated_location.x, self.estimated_location.y, self.estimated_location.depth)
+        
+        if self.estimated_velocity is not None:
+            state["estimated_velocity"] = (self.estimated_velocity.x, self.estimated_velocity.y, self.estimated_velocity.z)
+            
+        # Store observer location
+        if self.pf_core.previous_observer_location is not None:
+            loc = self.pf_core.previous_observer_location
+            state["previous_observer_location"] = (loc.x, loc.y, loc.depth)
+            
+        return state
+    
+    def decode_state(self, state_dict: Dict[str, Any]) -> None:
+        """
+        Restores the internal state of the particle filter.
+        
+        Args:
+            state_dict: Dictionary containing the serialized state
+        """
+        # Restore initialization flag
+        self.pf_core.is_initialized = state_dict.get("is_initialized", False)
+        
+        # Restore particles and weights
+        if "particles_state" in state_dict and state_dict["particles_state"] is not None:
+            self.pf_core.particles_state = np.array(state_dict["particles_state"])
+            self.current_particles_state = self.pf_core.particles_state.copy()
+        
+        if "weights" in state_dict and state_dict["weights"] is not None:
+            self.pf_core.weights = np.array(state_dict["weights"])
+        
+        # Restore covariance information
+        if "position_covariance_matrix" in state_dict and state_dict["position_covariance_matrix"] is not None:
+            self.pf_core.position_covariance_matrix = np.array(state_dict["position_covariance_matrix"])
+        
+        if "position_covariance_eigenvalues" in state_dict and state_dict["position_covariance_eigenvalues"] is not None:
+            self.pf_core.position_covariance_eigenvalues = np.array(state_dict["position_covariance_eigenvalues"])
+        
+        if "position_covariance_orientation" in state_dict:
+            self.pf_core.position_covariance_orientation = state_dict["position_covariance_orientation"]
+        
+        # Restore estimated location and velocity
+        if "estimated_location" in state_dict:
+            x, y, depth = state_dict["estimated_location"]
+            self.estimated_location = Location(x=x, y=y, depth=depth)
+            self.pf_core.estimated_location = self.estimated_location
+        else:
+            self.estimated_location = None
+            self.pf_core.estimated_location = None
+            
+        if "estimated_velocity" in state_dict:
+            x, y, z = state_dict["estimated_velocity"]
+            self.estimated_velocity = Velocity(x=x, y=y, z=z)
+            self.pf_core.estimated_velocity = self.estimated_velocity
+        else:
+            self.estimated_velocity = None
+            self.pf_core.estimated_velocity = None
+        
+        # Restore observer location
+        if "previous_observer_location" in state_dict:
+            x, y, depth = state_dict["previous_observer_location"]
+            self.pf_core.previous_observer_location = Location(x=x, y=y, depth=depth)
+        else:
+            self.pf_core.previous_observer_location = None

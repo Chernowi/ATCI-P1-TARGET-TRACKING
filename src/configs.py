@@ -1,5 +1,5 @@
+from typing import Dict, Literal, Tuple
 from pydantic import BaseModel, Field
-from typing import Dict, Literal, Optional, Tuple
 
 
 class SACConfig(BaseModel):
@@ -15,23 +15,21 @@ class SACConfig(BaseModel):
     tau: float = Field(0.005, description="Target network update rate")
     alpha: float = Field(0.005, description="Temperature parameter")
     auto_tune_alpha: bool = Field(True, description="Whether to auto-tune the alpha parameter")
-    n_steps: int = Field(4, description="Number of steps for n-step returns (1 for regular SAC)")
 
 
 class ReplayBufferConfig(BaseModel):
     """Configuration for the replay buffer"""
     capacity: int = Field(100000, description="Maximum capacity of replay buffer")
-    n_steps: int = Field(4, description="Number of steps for n-step returns (1 for regular SAC)")
-    gamma: float = Field(0.99, description="Discount factor for n-step returns")
+    gamma: float = Field(0.99, description="Discount factor for returns")
 
 
 class TrainingConfig(BaseModel):
     """Configuration for training"""
-    num_episodes: int = Field(50, description="Number of episodes to train")
+    num_episodes: int = Field(200, description="Number of episodes to train")
     max_steps: int = Field(250, description="Maximum steps per episode")
     batch_size: int = Field(32, description="Batch size for training")
     save_interval: int = Field(100, description="Interval for saving models")
-    log_frequency: int = Field(1, description="Frequency (in steps) for logging to TensorBoard")
+    log_frequency: int = Field(5, description="Frequency (in steps) for logging to TensorBoard")
     models_dir: str = Field("sac_models", description="Directory for saving models")
 
 

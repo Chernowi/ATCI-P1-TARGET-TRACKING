@@ -3,11 +3,10 @@ import os
 import torch
 
 from SAC import train_sac, evaluate_sac
-from nStepSAC import train_n_step_sac, evaluate_n_step_sac, NStepSAC
 from configs import CONFIGS, DefaultConfig
 
 
-def main(config_name: str, use_n_step: bool = False, cuda_device: str = None):
+def main(config_name: str, cuda_device: str = None):
     """Main function to train and evaluate the SAC agent."""
     if config_name not in CONFIGS:
         raise ValueError(
@@ -15,7 +14,6 @@ def main(config_name: str, use_n_step: bool = False, cuda_device: str = None):
 
     config: DefaultConfig = CONFIGS[config_name]
     print(f"Using configuration: '{config_name}'")
-    print(f"Using {'N-Step SAC' if use_n_step else 'regular SAC'} implementation")
     
     # Override CUDA device if specified
     if cuda_device:
@@ -27,25 +25,19 @@ def main(config_name: str, use_n_step: bool = False, cuda_device: str = None):
     os.makedirs(config.training.models_dir, exist_ok=True)
 
     print("Training SAC agent...")
-    if use_n_step:
-        agent, _ = train_n_step_sac(config=config, use_multi_gpu=use_multi_gpu)
-    else:
-        agent, _ = train_sac(config=config, use_multi_gpu=use_multi_gpu)
+    agent, _ = train_sac(config=config, use_multi_gpu=use_multi_gpu)
 
-    final_model_path = os.path.join(config.training.models_dir, 
-                                   "nstep_sac_final.pt" if use_n_step else "sac_final.pt")
+    final_model_path = os.path.join(config.training.models_dir, "sac_final.pt")
     agent.save_model(final_model_path)
     print(f"Final model saved to {final_model_path}")
+    
+    print("\nEvaluating SAC agent...")
 
-    # print("\nEvaluating SAC agent...")
-    # if use_n_step:
-    #     evaluate_n_step_sac(agent=agent, config=config)
-    # else:
-    #     evaluate_sac(agent=agent, config=config)
+    evaluate_sac(agent=agent, config=config)
 
-    # print(
-    #     f"\nTraining and evaluation complete. Find output in the {config.visualization.save_dir} directory.")
-    # print("You can convert the frames to a video using ffmpeg or view the generated GIFs.")
+    print(
+        f"\nTraining and evaluation complete. Find output in the {config.visualization.save_dir} directory.")
+    print("You can convert the frames to a video using ffmpeg or view the generated GIFs.")
 
 
 if __name__ == "__main__":
@@ -56,12 +48,8 @@ if __name__ == "__main__":
         help=f"Configuration name to use. Available: {list(CONFIGS.keys())}"
     )
     parser.add_argument(
-        "--n-step", action="store_true",
-        help="Use N-Step SAC implementation"
-    )
-    parser.add_argument(
         "--device", "-d", type=str, default=None,
         help="CUDA device to use (e.g., 'cuda:0', 'cuda:1', 'cpu')"
     )
     args = parser.parse_args()
-    main(config_name=args.config, use_n_step=args.n_step, cuda_device=args.device)
+    main(config_name=args.config, cuda_device=args.device)

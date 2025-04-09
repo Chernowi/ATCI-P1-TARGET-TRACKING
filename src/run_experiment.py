@@ -1,14 +1,13 @@
 import os
 import argparse
-from SAC import SAC, evaluate_sac
-from nStepSAC import NStepSAC, evaluate_n_step_sac
-from world import World
-from configs import CONFIGS, DefaultConfig
-from visualization import reset_trajectories
 import torch
 
+from SAC import SAC, evaluate_sac
+from configs import CONFIGS, DefaultConfig
+from visualization import reset_trajectories
 
-def run_experiment(config_name: str, model_path: str, num_episodes: int, max_steps: int, render: bool, use_n_step: bool = False):
+
+def run_experiment(config_name: str, model_path: str, num_episodes: int, max_steps: int, render: bool):
     """
     Load a trained SAC model and run an experiment using specified configuration.
 
@@ -18,7 +17,6 @@ def run_experiment(config_name: str, model_path: str, num_episodes: int, max_ste
         num_episodes: Number of episodes to run for evaluation.
         max_steps: Maximum steps per evaluation episode.
         render: Whether to render the environment and save GIFs.
-        use_n_step: Whether to use N-Step SAC implementation.
     """
     if config_name not in CONFIGS:
         raise ValueError(
@@ -39,40 +37,18 @@ def run_experiment(config_name: str, model_path: str, num_episodes: int, max_ste
     device = torch.device(config.cuda_device if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
-    # Create the appropriate agent type
-    if use_n_step:
-        agent = NStepSAC(config=config.sac, device=device)
-    else:
-        agent = SAC(config=config.sac, device=device)
+    # Create the SAC agent
+    agent = SAC(config=config.sac, device=device)
 
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"Model file not found: {model_path}")
     print(f"Loading model from {model_path}...")
     
-    # Check if model was saved with n-step info
-    checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
-    is_n_step_model = 'n_steps' in checkpoint and checkpoint['n_steps'] > 1
-    
-    # If model type doesn't match specified type, inform user
-    if is_n_step_model != use_n_step:
-        model_type = "n-step" if is_n_step_model else "regular"
-        print(f"Warning: Model was trained as {model_type} SAC but you specified {'n-step' if use_n_step else 'regular'} SAC.")
-        print(f"Switching to {model_type} SAC for compatibility.")
-        
-        if is_n_step_model:
-            agent = NStepSAC(config=config.sac)
-        else:
-            agent = SAC(config=config.sac)
-    
     agent.load_model(model_path)
     reset_trajectories()
 
     print(f"\nRunning experiment with model {os.path.basename(model_path)}...")
-    
-    if isinstance(agent, NStepSAC):
-        evaluate_n_step_sac(agent=agent, config=config)
-    else:
-        evaluate_sac(agent=agent, config=config)
+    evaluate_sac(agent=agent, config=config)
 
     print(
         f"\nExperiment complete. Visualizations saved to {config.visualization.save_dir} directory.")
@@ -105,10 +81,6 @@ if __name__ == "__main__":
         "--no-render", dest="render", action="store_false", default=None,
         help="Disable visualization rendering (overrides config)"
     )
-    parser.add_argument(
-        "--n-step", action="store_true",
-        help="Use N-Step SAC implementation"
-    )
 
     args = parser.parse_args()
 
@@ -123,6 +95,5 @@ if __name__ == "__main__":
         model_path=args.model,
         num_episodes=args.episodes,
         max_steps=args.steps,
-        render=args.render,
-        use_n_step=args.n_step
+        render=args.render
     )

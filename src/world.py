@@ -184,30 +184,80 @@ class World():
         # Clip reward for stability
         self.reward = np.clip(self.reward, -100.0, 100.0)
     
-    def encode_state(self) -> tuple:
+    def encode_state(self) -> dict:
         """
-        Encodes the current state for the RL agent.
+        Encodes the current state for the RL agent, including estimator state.
 
-        State: (agent_x, agent_y, agent_vx, agent_vy, est_landmark_x, est_landmark_y, est_landmark_depth (0), current_range)
+        Returns:
+            Dictionary containing all state information including:
+            - basic_state: The basic agent and environment state tuple 
+            - estimator_state: The full serialized estimator state
         """
+        # Get basic state tuple (what was previously returned)
         agent_loc, agent_vel = self.agent.location, self.agent.velocity
         if self.estimated_landmark.estimated_location:
-            est_loc = self.estimated_landmark.estimated_location; landmark_x, landmark_y, landmark_depth = est_loc.x, est_loc.y, 0.0
-        else: landmark_x, landmark_y, landmark_depth = 0.0, 0.0, 0.0
-        state = (agent_loc.x, agent_loc.y, agent_vel.x, agent_vel.y, landmark_x, landmark_y, landmark_depth, self.current_range)
-        assert len(state) == 8, f"Encoded state length {len(state)} != 8"; return state
+            est_loc = self.estimated_landmark.estimated_location
+            landmark_x, landmark_y, landmark_depth = est_loc.x, est_loc.y, 0.0
+        else: 
+            landmark_x, landmark_y, landmark_depth = 0.0, 0.0, 0.0
+        
+        basic_state = (agent_loc.x, agent_loc.y, agent_vel.x, agent_vel.y, 
+                      landmark_x, landmark_y, landmark_depth, self.current_range)
+        
+        # Add estimator state
+        estimator_state = self.estimated_landmark.encode_state()
+        
+        return {
+            'basic_state': basic_state,
+            'estimator_state': estimator_state
+        }
 
-    def decode_state(self, state: tuple):
+    def encode_state_tuple(self) -> tuple:
         """
-        Decodes a state tuple back into world objects (primarily for debugging/testing).
-        Note: Does not reconstruct the full particle filter state.
+        Legacy wrapper that returns just the basic state tuple for backwards compatibility.
+        
+        Returns:
+            Tuple containing the basic state information
         """
-        if len(state) != 8: print(f"Warning: decode_state expected tuple of length 8, got {len(state)}"); return
-        self.agent.location.x, self.agent.location.y = state[0], state[1]
-        self.agent.velocity.x, self.agent.velocity.y = state[2], state[3]
-        if self.estimated_landmark.estimated_location is None: self.estimated_landmark.estimated_location = Location(0,0,0)
-        self.estimated_landmark.estimated_location.x, self.estimated_landmark.estimated_location.y, self.estimated_landmark.estimated_location.depth = state[4], state[5], state[6]
-        self.current_range = state[7]; self._update_error_dist(); self.done = self.error_dist < self.success_threshold
+        state_dict = self.encode_state()
+        return state_dict['basic_state']
+
+    def decode_state(self, state: dict):
+        """
+        Decodes a state dictionary back into world objects,
+        including restoring the estimator's internal state.
+        
+        Args:
+            state: Dictionary containing 'basic_state' and 'estimator_state'
+        """
+        if 'basic_state' not in state or 'estimator_state' not in state:
+            print("Warning: Invalid state format for decoding")
+            return
+        
+        basic_state = state['basic_state']
+        estimator_state = state['estimator_state']
+        
+        if len(basic_state) != 8:
+            print(f"Warning: decode_state expected basic_state tuple of length 8, got {len(basic_state)}")
+            return
+        
+        # Restore agent state
+        self.agent.location.x, self.agent.location.y = basic_state[0], basic_state[1]
+        self.agent.velocity.x, self.agent.velocity.y = basic_state[2], basic_state[3]
+        
+        # Initialize estimated location if needed
+        if self.estimated_landmark.estimated_location is None:
+            self.estimated_landmark.estimated_location = Location(0, 0, 0)
+        
+        # Restore range and derived values
+        self.current_range = basic_state[7]
+        
+        # Restore the estimator's internal state
+        self.estimated_landmark.decode_state(estimator_state)
+        
+        # Update error distance based on restored state
+        self._update_error_dist()
+        self.done = self.error_dist < self.success_threshold
 
     def __str__(self):
         """String representation of the world state."""
