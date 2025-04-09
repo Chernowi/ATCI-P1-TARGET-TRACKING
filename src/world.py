@@ -172,12 +172,10 @@ class World():
         
         # 3. Terminal reward
         terminal_reward = 0.0
-        if current_distance > max_distance:
+        if current_distance < min_distance or current_distance > max_distance:
             terminal_reward = -100.0
             self.done = True
-        elif current_distance < min_distance:
-            terminal_reward = -1.0
-        
+
         # Calculate final reward
         self.reward = distance_reward + error_reward + terminal_reward
         
