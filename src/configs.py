@@ -19,18 +19,21 @@ class SACConfig(BaseModel):
 
 class ReplayBufferConfig(BaseModel):
     """Configuration for the replay buffer"""
-    capacity: int = Field(100000, description="Maximum capacity of replay buffer")
+    capacity: int = Field(1000000, description="Maximum capacity of replay buffer") # Increased capacity
     gamma: float = Field(0.99, description="Discount factor for returns")
 
 
 class TrainingConfig(BaseModel):
     """Configuration for training"""
-    num_episodes: int = Field(200, description="Number of episodes to train")
+    num_episodes: int = Field(1000, description="Number of episodes to train")
     max_steps: int = Field(250, description="Maximum steps per episode")
-    batch_size: int = Field(32, description="Batch size for training")
-    save_interval: int = Field(100, description="Interval for saving models")
-    log_frequency: int = Field(5, description="Frequency (in steps) for logging to TensorBoard")
+    batch_size: int = Field(256, description="Batch size for training") # Increased batch size
+    save_interval: int = Field(100, description="Interval (in episodes) for saving models")
+    log_frequency: int = Field(10, description="Frequency (in episodes) for logging to TensorBoard")
     models_dir: str = Field("sac_models", description="Directory for saving models")
+    learning_starts: int = Field(1000, description="Number of steps to collect before starting training updates")
+    train_freq: int = Field(1, description="Update the policy every n environment steps")
+    gradient_steps: int = Field(1, description="How many gradient steps to perform when training frequency is met")
 
 
 class EvaluationConfig(BaseModel):
@@ -131,7 +134,7 @@ class WorldConfig(BaseModel):
     distance_threshold: float = 10.0
     error_threshold: float = 5.0
     min_safe_distance: float = 2.0
-    
+
     # Landmark estimator config
     estimator_config: ParticleFilterConfig | LeastSquaresConfig = Field(default_factory=LeastSquaresConfig, description="Configuration for the landmark estimator")
 
@@ -156,7 +159,7 @@ vast_config.training.save_interval = 5000
 vast_config.particle_filter.num_particles = 5000
 vast_config.world.randomize_agent_initial_location = True
 vast_config.world.randomize_landmark_initial_location = True
-vast_config.world.randomize_landmark_initial_velocity = True 
+vast_config.world.randomize_landmark_initial_velocity = True
 
 CONFIGS: Dict[str, DefaultConfig] = {
     "default": default_config,

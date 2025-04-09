@@ -12,8 +12,7 @@ from tqdm import tqdm
 from world import World
 from world_objects import Velocity
 from visualization import visualize_world, reset_trajectories, save_gif
-from configs import DefaultConfig, ReplayBufferConfig, SACConfig
-# Add TensorBoard import
+from configs import DefaultConfig, ReplayBufferConfig, SACConfig, TrainingConfig
 from torch.utils.tensorboard import SummaryWriter
 
 class ReplayBuffer:
@@ -173,7 +172,7 @@ class SAC:
     def select_action(self, state, evaluate=False):
         """Select action based on state."""
         state_tuple = state['basic_state']
-            
+
         state = torch.FloatTensor(state_tuple).to(self.device).unsqueeze(0)
         with torch.no_grad():
             if evaluate:
@@ -190,14 +189,13 @@ class SAC:
     def update_parameters(self, memory: ReplayBuffer, batch_size: int):
         """Perform a single SAC update step using a batch from memory."""
         if len(memory) < batch_size:
+             # This check should ideally happen before calling update_parameters
+             # but double-checking here is safe.
             return None
 
-        state_batch_dict, action_batch_scaled, reward_batch, next_state_batch_dict, done_batch = memory.sample(
+        # Get samples
+        state_batch, action_batch_scaled, reward_batch, next_state_batch, done_batch = memory.sample(
             batch_size)
-
-        # Extract basic_state tuples from dictionaries
-        state_batch = np.array([s['basic_state'] for s in state_batch_dict])
-        next_state_batch = np.array([s['basic_state'] for s in next_state_batch_dict])
 
         state_batch = torch.FloatTensor(state_batch).to(self.device)
         # Rescale actions back to [-1, 1] for network input
@@ -318,6 +316,16 @@ def train_sac(config: DefaultConfig, use_multi_gpu: bool = False):
     world_config = config.world
     cuda_device = config.cuda_device
 
+    # Extract training hyperparameters
+    learning_starts = train_config.learning_starts
+    gradient_steps = train_config.gradient_steps
+    train_freq = train_config.train_freq
+    batch_size = train_config.batch_size
+    log_frequency_ep = train_config.log_frequency # Log frequency in episodes
+    save_interval_ep = train_config.save_interval # Save frequency in episodes
+
+    total_steps = 0         # Keep track of total environment steps
+
     # Create logs directory for TensorBoard
     log_dir = os.path.join("runs", f"sac_training_{int(time.time())}")
     os.makedirs(log_dir, exist_ok=True)
@@ -329,13 +337,16 @@ def train_sac(config: DefaultConfig, use_multi_gpu: bool = False):
             print(f"Using {torch.cuda.device_count()} GPUs for training (Note: SAC updates are often sequential)")
             device = torch.device("cuda")
         else:
-            # Use the configured CUDA device
             device = torch.device(cuda_device)
             print(f"Using device: {device}")
             if 'cuda' in cuda_device and not cuda_device == 'cuda':
-                device_idx = int(cuda_device.split(':')[1])
-                if 0 <= device_idx < torch.cuda.device_count():
-                    print(f"GPU: {torch.cuda.get_device_name(device_idx)}")
+                try:
+                    device_idx = int(cuda_device.split(':')[1])
+                    if 0 <= device_idx < torch.cuda.device_count():
+                         print(f"GPU: {torch.cuda.get_device_name(device_idx)}")
+                except (IndexError, ValueError):
+                     print(f"Warning: Invalid CUDA device string '{cuda_device}'. Using default CUDA device.")
+                     device = torch.device("cuda:0") # Default to cuda:0 if format is wrong
     else:
         device = torch.device("cpu")
         print("GPU not available, using CPU for training")
@@ -347,13 +358,12 @@ def train_sac(config: DefaultConfig, use_multi_gpu: bool = False):
 
     episode_rewards = []
     all_losses = {'critic_loss': [], 'actor_loss': [], 'alpha': []}
-    
-    # Add timing metric tracking
+
     timing_metrics = {
         'env_step_time': [],
         'parameter_update_time': []
     }
-    
+
     pbar = tqdm(range(1, train_config.num_episodes + 1),
                 desc="Training", unit="episode")
 
@@ -362,109 +372,120 @@ def train_sac(config: DefaultConfig, use_multi_gpu: bool = False):
         state = env.encode_state()
         episode_reward = 0
         episode_steps = 0
-        episode_transitions = []
-        
-        # Timing metrics for this episode
+
         episode_step_times = []
         episode_param_update_times = []
+        episode_losses = {'critic_loss': [], 'actor_loss': [], 'alpha': []}
 
-        for _ in range(train_config.max_steps):
+        for step_in_episode in range(train_config.max_steps):
             action_scaled = agent.select_action(state, evaluate=False)
             action_obj = Velocity(
                 x=action_scaled[0], y=action_scaled[1], z=0.0)
-            
-            # Measure environment step time
+
             step_start_time = time.time()
             env.step(action_obj, training=True)
             step_time = time.time() - step_start_time
             episode_step_times.append(step_time)
-            
+
             reward = env.reward
             next_state = env.encode_state()
             done = env.done
-            episode_transitions.append(
-                (state, action_scaled, reward, next_state, done))
+
+            memory.push(state['basic_state'], action_scaled, reward, next_state['basic_state'], done) # Store basic_state directly
+
             state = next_state
             episode_reward += reward
             episode_steps += 1
+            total_steps += 1
+
+            # Perform Updates Here
+            if total_steps >= learning_starts and total_steps % train_freq == 0:
+                for _ in range(gradient_steps):
+                    if len(memory) >= batch_size:
+                        update_start_time = time.time()
+                        losses = agent.update_parameters(memory, batch_size)
+                        update_time = time.time() - update_start_time
+                        episode_param_update_times.append(update_time)
+
+                        if losses:
+                            episode_losses['critic_loss'].append(losses['critic_loss'])
+                            episode_losses['actor_loss'].append(losses['actor_loss'])
+                            episode_losses['alpha'].append(losses['alpha'])
+
             if done:
                 break
 
-        for transition in episode_transitions:
-            memory.push(*transition)
-
-        num_updates = episode_steps
-        episode_avg_losses = {'critic_loss': 0, 'actor_loss': 0, 'alpha': 0}
-        update_count = 0
-        if len(memory) >= train_config.batch_size:
-            for _ in range(num_updates):
-                # Measure parameter update time
-                update_start_time = time.time()
-                losses = agent.update_parameters(
-                    memory, train_config.batch_size)
-                update_time = time.time() - update_start_time
-                episode_param_update_times.append(update_time)
-                
-                if losses:
-                    episode_avg_losses['critic_loss'] += losses['critic_loss']
-                    episode_avg_losses['actor_loss'] += losses['actor_loss']
-                    episode_avg_losses['alpha'] = losses['alpha']
-                    update_count += 1
-            if update_count > 0:
-                episode_avg_losses['critic_loss'] /= update_count
-                episode_avg_losses['actor_loss'] /= update_count
-                all_losses['critic_loss'].append(
-                    episode_avg_losses['critic_loss'])
-                all_losses['actor_loss'].append(
-                    episode_avg_losses['actor_loss'])
-                all_losses['alpha'].append(episode_avg_losses['alpha'])
-
+        # --- Logging and Reporting (End of Episode) ---
         episode_rewards.append(episode_reward)
-        
-        # Calculate average timing metrics for this episode
-        if episode_step_times:
-            avg_step_time = np.mean(episode_step_times)
-            timing_metrics['env_step_time'].append(avg_step_time)
-            if episode % train_config.log_frequency == 0:
-                writer.add_scalar('Time/Environment_Step_ms', avg_step_time * 1000, episode)
-        
-        if episode_param_update_times:
-            avg_param_update_time = np.mean(episode_param_update_times)
-            timing_metrics['parameter_update_time'].append(avg_param_update_time)
-            if episode % train_config.log_frequency == 0:
-                writer.add_scalar('Time/Parameter_Update_ms', avg_param_update_time * 1000, episode)
-        
-        # Log metrics to TensorBoard at reduced frequency
-        if episode % train_config.log_frequency == 0:
-            writer.add_scalar('Reward/Episode', episode_reward, episode)
-            writer.add_scalar('Steps/Episode', episode_steps, episode)
-            writer.add_scalar('Error/Distance', env.error_dist, episode)
-            writer.add_scalar('Time/Particle_Filter_ms', env.pf_update_time * 1000, episode)
-            
-            if update_count > 0:
-                writer.add_scalar('Loss/Critic', episode_avg_losses['critic_loss'], episode)
-                writer.add_scalar('Loss/Actor', episode_avg_losses['actor_loss'], episode)
-                writer.add_scalar('Alpha/Value', episode_avg_losses['alpha'], episode)
 
-        if episode % 10 == 0:
-            lookback = min(10, episode)
-            avg_reward = np.mean(episode_rewards[-lookback:])
-            if episode % train_config.log_frequency == 0:
-                writer.add_scalar('Reward/Average_10', avg_reward, episode)
-            pbar_postfix = {'avg_reward': f'{avg_reward:.2f}'}
-            if update_count > 0:
-                pbar_postfix['crit_loss'] = f"{episode_avg_losses['critic_loss']:.3f}"
-                pbar_postfix['act_loss'] = f"{episode_avg_losses['actor_loss']:.3f}"
-                pbar_postfix['alpha'] = f"{episode_avg_losses['alpha']:.3f}"
+        avg_losses = {k: np.mean(v) if v else 0 for k, v in episode_losses.items()}
+        updates_made_this_episode = any(episode_losses.values())
+        if updates_made_this_episode:
+             all_losses['critic_loss'].append(avg_losses['critic_loss'])
+             all_losses['actor_loss'].append(avg_losses['actor_loss'])
+             all_losses['alpha'].append(avg_losses['alpha']) # Use the average alpha for the episode loss tracking
+
+        # Log metrics to TensorBoard based on episode frequency
+        if episode % log_frequency_ep == 0:
+            # Time Metrics
+            if episode_step_times:
+                avg_step_time = np.mean(episode_step_times)
+                timing_metrics['env_step_time'].append(avg_step_time)
+                writer.add_scalar('Time/Environment_Step_ms', avg_step_time * 1000, total_steps)
+
+            if episode_param_update_times:
+                avg_param_update_time = np.mean(episode_param_update_times)
+                timing_metrics['parameter_update_time'].append(avg_param_update_time)
+                writer.add_scalar('Time/Parameter_Update_ms', avg_param_update_time * 1000, total_steps)
+            elif total_steps >= learning_starts: # Log 0 if updates should have happened but buffer wasn't full
+                 writer.add_scalar('Time/Parameter_Update_ms', 0, total_steps)
+
+
+            # Performance & Environment Metrics
+            writer.add_scalar('Reward/Episode', episode_reward, total_steps)
+            writer.add_scalar('Steps/Episode', episode_steps, total_steps)
+            writer.add_scalar('Progress/Total_Steps', total_steps, episode) # Log total steps vs episode
+            writer.add_scalar('Error/Distance_EndEpisode', env.error_dist, total_steps)
+            writer.add_scalar('Time/Particle_Filter_ms', env.pf_update_time * 1000, total_steps) # Assuming pf_update_time is last step's time
+
+            # Loss Metrics (if updates occurred)
+            if updates_made_this_episode:
+                writer.add_scalar('Loss/Critic_AvgEp', avg_losses['critic_loss'], total_steps)
+                writer.add_scalar('Loss/Actor_AvgEp', avg_losses['actor_loss'], total_steps)
+                writer.add_scalar('Alpha/Value', avg_losses['alpha'], total_steps) # Log the average alpha for the episode
+
+            # Averaged Reward
+            lookback = min(100, len(episode_rewards)) # Use a larger window for smoothed reward
+            avg_reward_100 = np.mean(episode_rewards[-lookback:]) if episode_rewards else 0
+            writer.add_scalar('Reward/Average_100', avg_reward_100, total_steps)
+
+
+        # Update progress bar (more frequently than tensorboard logging)
+        if episode % 10 == 0: # Update pbar every 10 episodes
+            lookback = min(10, len(episode_rewards))
+            avg_reward_10 = np.mean(episode_rewards[-lookback:]) if episode_rewards else 0
+            pbar_postfix = {'avg_rew_10': f'{avg_reward_10:.2f}', 'steps': total_steps}
+            if updates_made_this_episode:
+                pbar_postfix['crit_loss'] = f"{avg_losses['critic_loss']:.3f}"
+                pbar_postfix['act_loss'] = f"{avg_losses['actor_loss']:.3f}"
+                pbar_postfix['alpha'] = f"{avg_losses['alpha']:.3f}"
             pbar.set_postfix(pbar_postfix)
 
-        if episode % train_config.save_interval == 0:
+
+        # Save model based on episode frequency
+        if episode % save_interval_ep == 0:
             save_path = os.path.join(
-                train_config.models_dir, f"sac_ep{episode}.pt")
+                train_config.models_dir, f"sac_ep{episode}_step{total_steps}.pt")
             agent.save_model(save_path)
 
     pbar.close()
     writer.close()
+    print(f"Training finished. Total steps: {total_steps}")
+    # Save final model
+    final_save_path = os.path.join(
+        train_config.models_dir, f"sac_final_ep{train_config.num_episodes}_step{total_steps}.pt")
+    agent.save_model(final_save_path)
+
     return agent, episode_rewards
 
 
@@ -483,8 +504,7 @@ def evaluate_sac(agent: SAC, config: DefaultConfig):
 
     print(f"\nRunning Evaluation for {eval_config.num_episodes} episodes...")
     for episode in range(eval_config.num_episodes):
-        # World requires both world_config and pf_config
-        env = World(world_config=world_config)
+        env = World(world_config=world_config) # Recreate world for each eval episode
         state = env.encode_state()
         episode_reward = 0
         episode_frames = []
@@ -492,41 +512,55 @@ def evaluate_sac(agent: SAC, config: DefaultConfig):
         if eval_config.render:
             os.makedirs(vis_config.save_dir, exist_ok=True)
             reset_trajectories()
-            initial_frame_file = visualize_world(
-                world=env,
-                vis_config=vis_config,
-                filename=f"eval_ep{episode+1}_frame_000_initial.png",
-                collect_for_gif=True  # This flag might be redundant if frame list is managed here
-            )
-            if initial_frame_file:
-                episode_frames.append(initial_frame_file)
+            try:
+                initial_frame_file = visualize_world(
+                    world=env,
+                    vis_config=vis_config,
+                    filename=f"eval_ep{episode+1}_frame_000_initial.png",
+                    collect_for_gif=True
+                )
+                if initial_frame_file:
+                    episode_frames.append(initial_frame_file)
+            except Exception as e:
+                print(f"Warning: Visualization failed for initial state. Error: {e}")
+
 
         for step in range(eval_config.max_steps):
             action_scaled = agent.select_action(state, evaluate=True)
             action_obj = Velocity(
                 x=action_scaled[0], y=action_scaled[1], z=0.0)
             env.step(action_obj, training=False)
-            reward = env.reward
+            reward = env.reward # Use the environment's reward calculation
             next_state = env.encode_state()
             done = env.done
 
             if eval_config.render:
-                frame_file = visualize_world(
-                    world=env,
-                    vis_config=vis_config,
-                    filename=f"eval_ep{episode+1}_frame_{step+1:03d}.png",
-                    collect_for_gif=True  # This flag might be redundant
-                )
-                if frame_file:
-                    episode_frames.append(frame_file)
+                try:
+                    frame_file = visualize_world(
+                        world=env,
+                        vis_config=vis_config,
+                        filename=f"eval_ep{episode+1}_frame_{step+1:03d}.png",
+                        collect_for_gif=True
+                    )
+                    if frame_file:
+                        episode_frames.append(frame_file)
+                except Exception as e:
+                     print(f"Warning: Visualization failed for step {step+1}. Error: {e}")
+
 
             state = next_state
             episode_reward += reward
 
             if done:
-                success_count += 1
-                print(
-                    f"  Episode {episode+1}: Success! Found landmark at step {step+1} (Error: {env.error_dist:.2f} < threshold {world_config.success_threshold})")
+                # Check if success was due to reaching threshold or other condition (like out of bounds if added)
+                if env.error_dist <= world_config.success_threshold:
+                    success_count += 1
+                    print(
+                        f"  Episode {episode+1}: Success! Found landmark at step {step+1} (Error: {env.error_dist:.2f} <= threshold {world_config.success_threshold})")
+                else:
+                    print(
+                        f"  Episode {episode+1}: Terminated early at step {step+1} (Not success - e.g., OOB). Final Error: {env.error_dist:.2f}"
+                    )
                 break
 
         if not done:
@@ -538,22 +572,29 @@ def evaluate_sac(agent: SAC, config: DefaultConfig):
 
         if eval_config.render and episode_frames:
             gif_filename = f"eval_episode_{episode+1}.gif"
-            gif_path = save_gif(
-                output_filename=gif_filename,
-                vis_config=vis_config,
-                frame_paths=episode_frames,
-                delete_frames=vis_config.delete_frames_after_gif
-            )
-            if gif_path:
-                all_episode_gif_paths.append(gif_path)
+            try:
+                gif_path = save_gif(
+                    output_filename=gif_filename,
+                    vis_config=vis_config,
+                    frame_paths=episode_frames,
+                    delete_frames=vis_config.delete_frames_after_gif
+                )
+                if gif_path:
+                    all_episode_gif_paths.append(gif_path)
+            except Exception as e:
+                print(f"Warning: Failed to create or save GIF for episode {episode+1}. Error: {e}")
+                # Optionally, clean up frames if GIF failed and delete_frames is True
+                if vis_config.delete_frames_after_gif:
+                    for frame in episode_frames:
+                        if os.path.exists(frame):
+                            try:
+                                os.remove(frame)
+                            except OSError:
+                                pass # Ignore errors during cleanup
+
 
     agent.actor.train()
     agent.critic.train()
-
-    if eval_config.render and len(all_episode_gif_paths) > 1:
-        # Skipping combined GIF creation from other GIFs as it's complex/lossy
-        print(
-            f"\nCombined GIF creation skipped. View individual episode GIFs: {all_episode_gif_paths}")
 
     avg_eval_reward = np.mean(eval_rewards) if eval_rewards else 0
     success_rate = success_count / \
@@ -561,10 +602,12 @@ def evaluate_sac(agent: SAC, config: DefaultConfig):
     print("\n--- Evaluation Summary ---")
     print(f"Average Evaluation Reward: {avg_eval_reward:.2f}")
     print(
-        f"Success Rate: {success_rate:.2f} ({success_count}/{eval_config.num_episodes})")
-    if eval_config.render:
+        f"Success Rate (reaching threshold): {success_rate:.2f} ({success_count}/{eval_config.num_episodes})")
+    if eval_config.render and all_episode_gif_paths:
         print(
             f"Individual episode GIFs saved in the '{os.path.abspath(vis_config.save_dir)}' directory.")
+    elif eval_config.render:
+         print("Rendering was enabled, but no GIFs were successfully created.")
     print("--- End Evaluation ---")
 
     return eval_rewards

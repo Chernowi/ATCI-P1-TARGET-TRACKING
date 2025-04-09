@@ -40,7 +40,7 @@ def main():
         train_cmd = [sys.executable, "src/main.py", f"--config={args.config}"]
         if args.device:
             train_cmd.extend(["--device", args.device])
-        subprocess.run(train_cmd)
+        subprocess.run(train_cmd, check=True)
     finally:
         # Cleanup
         print("Training complete or interrupted. Stopping TensorBoard...")
