@@ -30,11 +30,11 @@ class PPOConfig(BaseModel):
     gamma: float = Field(0.99, description="Discount factor")
     gae_lambda: float = Field(0.95, description="GAE lambda parameter")
     policy_clip: float = Field(0.15, description="PPO clipping parameter")
-    n_epochs: int = Field(10, description="Number of optimization epochs per update")
+    n_epochs: int = Field(3, description="Number of optimization epochs per update")
     entropy_coef: float = Field(0.01, description="Entropy coefficient for exploration")
     value_coef: float = Field(0.5, description="Value loss coefficient")
     batch_size: int = Field(64, description="Batch size for training")
-    steps_per_update: int = Field(2048, description="Environment steps between PPO updates")
+    steps_per_update: int = Field(8192, description="Environment steps between PPO updates")
 
 
 class ReplayBufferConfig(BaseModel):
