@@ -8,6 +8,7 @@ import imageio.v2 as imageio
 from PIL import Image
 import glob
 from configs import VisualizationConfig
+from particle_filter import TrackedTargetPF
 
 # Global trajectory storage - reset using reset_trajectories()
 _agent_trajectory = []
@@ -85,26 +86,27 @@ def visualize_world(world, vis_config: VisualizationConfig, filename=None, show_
                     [world.agent.location.y, est_loc.y],
                     'g--', alpha=0.5, label='Est. Range')
 
-        pf_core = world.estimated_landmark.pf_core
-        if pf_core and pf_core.particles_state is not None and pf_core.num_particles < 500:
-            particles = pf_core.particles_state
-            ax.scatter(particles[:, 0], particles[:, 2], color='gray',
-                       marker='.', s=1, alpha=0.3, label='Particles')
+        if isinstance(world.estimated_landmark, TrackedTargetPF):        
+            pf_core = world.estimated_landmark.pf_core
+            if pf_core and pf_core.particles_state is not None and pf_core.num_particles < 500:
+                particles = pf_core.particles_state
+                ax.scatter(particles[:, 0], particles[:, 2], color='gray',
+                        marker='.', s=1, alpha=0.3, label='Particles')
 
-        if hasattr(pf_core, 'position_covariance_matrix') and pf_core.position_covariance_eigenvalues is not None:
-            try:
-                from matplotlib.patches import Ellipse
-                eigvals = pf_core.position_covariance_eigenvalues
-                angle = np.degrees(pf_core.position_covariance_orientation)
-                safe_eigvals = np.maximum(eigvals, 1e-9)
-                width = safe_eigvals[0]**0.5 * 2 * 1.96
-                height = safe_eigvals[1]**0.5 * 2 * 1.96
+            if hasattr(pf_core, 'position_covariance_matrix') and pf_core.position_covariance_eigenvalues is not None:
+                try:
+                    from matplotlib.patches import Ellipse
+                    eigvals = pf_core.position_covariance_eigenvalues
+                    angle = np.degrees(pf_core.position_covariance_orientation)
+                    safe_eigvals = np.maximum(eigvals, 1e-9)
+                    width = safe_eigvals[0]**0.5 * 2 * 1.96
+                    height = safe_eigvals[1]**0.5 * 2 * 1.96
 
-                ellipse = Ellipse(xy=(est_loc.x, est_loc.y), width=width, height=height, angle=angle,
-                                  edgecolor='purple', fc='None', lw=1, ls='--', label='95% Conf.')
-                ax.add_patch(ellipse)
-            except Exception as e:
-                print(f"Warning: Could not plot covariance ellipse - {e}")
+                    ellipse = Ellipse(xy=(est_loc.x, est_loc.y), width=width, height=height, angle=angle,
+                                    edgecolor='purple', fc='None', lw=1, ls='--', label='95% Conf.')
+                    ax.add_patch(ellipse)
+                except Exception as e:
+                    print(f"Warning: Could not plot covariance ellipse - {e}")
     else:
         if world.agent and world.agent.location:
             ax.text(0.5, 0.02, "PF not initialized", ha='center',

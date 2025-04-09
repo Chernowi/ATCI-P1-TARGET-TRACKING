@@ -1,28 +1,33 @@
 from particle_filter import TrackedTargetPF
 from world_objects import Object, Location, Velocity
-from configs import WorldConfig, ParticleFilterConfig
+from configs import WorldConfig, LeastSquaresConfig
 import numpy as np
 import random
 import time
+from least_squares import TrackedTargetLS
 
 class World():
     """
     Represents the simulation environment containing an agent and landmarks.
     """
-    def __init__(self, world_config: WorldConfig, pf_config: ParticleFilterConfig):
+    def __init__(self, world_config: WorldConfig):
         """
         Initialize the world simulation environment using configuration.
 
         Args:
             world_config: Configuration object for the world settings.
             pf_config: Configuration object for the particle filter settings.
+            ls_config: Optional configuration for least squares estimator.
+            estimation_method: Override for estimation method ('particle_filter' or 'least_squares').
         """
         self.world_config = world_config
-        self.pf_config = pf_config
         self.dt = world_config.dt
         self.success_threshold = world_config.success_threshold
-
-        self.estimated_landmark = TrackedTargetPF(config=pf_config)
+        
+        if isinstance(world_config.estimator_config, LeastSquaresConfig):
+            self.estimated_landmark = TrackedTargetLS(config=world_config.estimator_config)
+        else:
+            self.estimated_landmark = TrackedTargetPF(config=world_config.estimator_config)
 
         # Initialize True Landmark location
         if world_config.randomize_landmark_initial_location:
@@ -138,31 +143,45 @@ class World():
             self._calculate_reward(noisy_range)  # Use noisy range for reward calculation
 
     def _calculate_reward(self, measurement: float):
-        """Calculate reward based on current state and measurement."""
         self._update_error_dist()
         
-        # Use a bounded reward for error distance (tanh gives values between -1 and 1)
-        # Multiply by a scale factor to get desired reward magnitude
-        error_scale = 5.0
-        if self.error_dist != float('inf'):
-            # Lower error = higher reward (negative sign inverts the relationship)
-            self.reward = error_scale * (1.0 - np.tanh(self.error_dist / 10.0))
-        else:
-            self.reward = 0.0
-            
-        # Penalty for each step
-        self.reward -= self.world_config.step_penalty
+        # Calculate variables needed for rewards
+        current_distance = measurement  # distance between agent and target
+        position_error = self.error_dist  # prediction error between estimated and actual target position
         
-        # Handle out of range condition
-        if measurement > self.world_config.out_of_range_threshold:
+        # Get parameters from config
+        reward_scale = self.world_config.reward_scale
+        distance_threshold = self.world_config.distance_threshold
+        error_threshold = self.world_config.error_threshold
+        min_distance = self.world_config.min_safe_distance
+        max_distance = self.world_config.out_of_range_threshold
+        
+        # 1. Distance-based reward
+        if current_distance > distance_threshold:
+            distance_reward = reward_scale * (0.5 - current_distance / 100.0)  # Normalized to reasonable scale
+        else:
+            distance_reward = 1.0
+        
+        # 2. Error-based reward
+        if position_error != float('inf') and position_error > error_threshold:
+            error_reward = reward_scale * (0.5 - position_error / 100.0)  # Normalized to reasonable scale
+        elif position_error != float('inf'):
+            error_reward = 1.0
+        else:
+            error_reward = 0.0  # No estimate available
+        
+        # 3. Terminal reward
+        terminal_reward = 0.0
+        if current_distance > max_distance:
+            terminal_reward = -100.0
             self.done = True
-            self.reward -= self.world_config.out_of_range_penalty
-        else:
-            # Encourage getting closer to the target using a bounded reward function
-            closeness_reward = 5.0 * (1.0 - np.tanh(measurement / 20.0))
-            self.reward += closeness_reward
+        elif current_distance < min_distance:
+            terminal_reward = -1.0
         
-        # Clip reward to reasonable bounds
+        # Calculate final reward
+        self.reward = distance_reward + error_reward + terminal_reward
+        
+        # Clip reward for stability
         self.reward = np.clip(self.reward, -100.0, 100.0)
     
     def encode_state(self) -> tuple:

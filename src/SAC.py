@@ -11,7 +11,7 @@ from collections import deque
 from tqdm import tqdm
 from world import World
 from world_objects import Velocity
-from visualization import visualize_world, reset_trajectories, save_gif, create_gif_from_files
+from visualization import visualize_world, reset_trajectories, save_gif
 from configs import DefaultConfig, ReplayBufferConfig, SACConfig
 # Add TensorBoard import
 from torch.utils.tensorboard import SummaryWriter
@@ -310,15 +310,13 @@ def train_sac(config: DefaultConfig, use_multi_gpu: bool = False):
     train_config = config.training
     buffer_config = config.replay_buffer
     world_config = config.world
-    pf_config = config.particle_filter
-    cuda_device = config.cuda_device  # Get the configured CUDA device
+    cuda_device = config.cuda_device
 
     # Create logs directory for TensorBoard
     log_dir = os.path.join("runs", f"sac_training_{int(time.time())}")
     os.makedirs(log_dir, exist_ok=True)
     writer = SummaryWriter(log_dir=log_dir)
     print(f"TensorBoard logs will be saved to: {log_dir}")
-    print("To view logs, run: tensorboard --logdir=runs")
 
     if torch.cuda.is_available():
         if use_multi_gpu and torch.cuda.device_count() > 1:
@@ -354,8 +352,7 @@ def train_sac(config: DefaultConfig, use_multi_gpu: bool = False):
                 desc="Training", unit="episode")
 
     for episode in pbar:
-        # World requires both world_config and pf_config
-        env = World(world_config=world_config, pf_config=pf_config)
+        env = World(world_config=world_config)
         state = env.encode_state()
         episode_reward = 0
         episode_steps = 0
@@ -365,7 +362,7 @@ def train_sac(config: DefaultConfig, use_multi_gpu: bool = False):
         episode_step_times = []
         episode_param_update_times = []
 
-        for step in range(train_config.max_steps):
+        for _ in range(train_config.max_steps):
             action_scaled = agent.select_action(state, evaluate=False)
             action_obj = Velocity(
                 x=action_scaled[0], y=action_scaled[1], z=0.0)
@@ -482,7 +479,7 @@ def evaluate_sac(agent: SAC, config: DefaultConfig):
     print(f"\nRunning Evaluation for {eval_config.num_episodes} episodes...")
     for episode in range(eval_config.num_episodes):
         # World requires both world_config and pf_config
-        env = World(world_config=world_config, pf_config=pf_config)
+        env = World(world_config=world_config)
         state = env.encode_state()
         episode_reward = 0
         episode_frames = []

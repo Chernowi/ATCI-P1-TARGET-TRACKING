@@ -27,9 +27,9 @@ class ReplayBufferConfig(BaseModel):
 
 class TrainingConfig(BaseModel):
     """Configuration for training"""
-    num_episodes: int = Field(200, description="Number of episodes to train")
+    num_episodes: int = Field(50, description="Number of episodes to train")
     max_steps: int = Field(250, description="Maximum steps per episode")
-    batch_size: int = Field(256, description="Batch size for training")
+    batch_size: int = Field(32, description="Batch size for training")
     save_interval: int = Field(100, description="Interval for saving models")
     log_frequency: int = Field(1, description="Frequency (in steps) for logging to TensorBoard")
     models_dir: str = Field("sac_models", description="Directory for saving models")
@@ -68,6 +68,40 @@ class VelocityRandomizationRange(BaseModel):
     vz_range: Tuple[float, float] = Field((-0.1, 0.1), description="Min/Max Vz range for randomization")
 
 
+class ParticleFilterConfig(BaseModel):
+    """Configuration for the particle filter"""
+    num_particles: int = Field(1000, description="Number of particles")
+    initial_range_stddev: float = Field(0.02, description="Standard deviation for initial particle spread")
+    initial_velocity_guess: float = Field(0.1, description="Initial velocity guess for particles")
+    estimation_method: Literal["range", "area"] = Field("range", description="Method for estimation (range or area)")
+    max_particle_range: float = Field(250.0, description="Maximum range for particles (used in area method or init)")
+    process_noise_pos: float = Field(0.02, description="Process noise for position")
+    process_noise_orient: float = Field(0.2, description="Process noise for orientation")
+    process_noise_vel: float = Field(0.02, description="Process noise for velocity")
+    measurement_noise_stddev: float = Field(5.0, description="Standard deviation for measurement noise")
+    resampling_method: int = Field(2, description="Method for resampling")
+    pf_eval_max_mean_range_error_factor: float = Field(0.1, description="Factor of max_particle_range used as threshold for PF quality check")
+    pf_eval_dispersion_threshold: float = Field(5.0, description="Dispersion threshold for PF quality check")
+
+
+class LeastSquaresConfig(BaseModel):
+    """Configuration for the Least Squares estimator"""
+    history_size: int = Field(30, description="Number of measurements to keep in history")
+    min_points_required: int = Field(3, description="Minimum number of points required for estimation")
+    position_buffer_size: int = Field(5, description="Number of position estimates to keep for velocity calculation")
+    velocity_smoothing: int = Field(3, description="Number of position points to use for velocity smoothing")
+    min_observer_movement: float = Field(0.5, description="Minimum movement required between measurement points")
+
+
+class VisualizationConfig(BaseModel):
+    """Configuration for visualization"""
+    save_dir: str = Field("world_snapshots", description="Directory for saving visualizations")
+    figure_size: tuple = Field((10, 8), description="Figure size for visualizations")
+    max_trajectory_points: int = Field(100, description="Max trajectory points to display")
+    gif_frame_duration: float = Field(0.2, description="Duration of each frame in generated GIFs")
+    delete_frames_after_gif: bool = Field(True, description="Delete individual PNG frames after creating GIF")
+
+
 class WorldConfig(BaseModel):
     """Configuration for the world"""
     dt: float = Field(1.0, description="Time step")
@@ -94,31 +128,14 @@ class WorldConfig(BaseModel):
     range_measurement_base_noise: float = 0.1  # Base noise level in meters
     range_measurement_distance_factor: float = 0.05  # Noise increases by 5% of distance
 
-
-class ParticleFilterConfig(BaseModel):
-    """Configuration for the particle filter"""
-    num_particles: int = Field(1000, description="Number of particles")
-    initial_range_stddev: float = Field(0.02, description="Standard deviation for initial particle spread")
-    initial_velocity_guess: float = Field(0.1, description="Initial velocity guess for particles")
-    estimation_method: Literal["range", "area"] = Field("range", description="Method for estimation (range or area)")
-    max_particle_range: float = Field(250.0, description="Maximum range for particles (used in area method or init)")
-    process_noise_pos: float = Field(0.02, description="Process noise for position")
-    process_noise_orient: float = Field(0.2, description="Process noise for orientation")
-    process_noise_vel: float = Field(0.02, description="Process noise for velocity")
-    measurement_noise_stddev: float = Field(5.0, description="Standard deviation for measurement noise")
-    resampling_method: int = Field(2, description="Method for resampling")
-    pf_eval_max_mean_range_error_factor: float = Field(0.1, description="Factor of max_particle_range used as threshold for PF quality check")
-    pf_eval_dispersion_threshold: float = Field(5.0, description="Dispersion threshold for PF quality check")
-
-
-class VisualizationConfig(BaseModel):
-    """Configuration for visualization"""
-    save_dir: str = Field("world_snapshots", description="Directory for saving visualizations")
-    figure_size: tuple = Field((10, 8), description="Figure size for visualizations")
-    max_trajectory_points: int = Field(100, description="Max trajectory points to display")
-    gif_frame_duration: float = Field(0.2, description="Duration of each frame in generated GIFs")
-    delete_frames_after_gif: bool = Field(True, description="Delete individual PNG frames after creating GIF")
-
+    # Reward function parameters
+    reward_scale: float = 5.0
+    distance_threshold: float = 10.0
+    error_threshold: float = 5.0
+    min_safe_distance: float = 2.0
+    
+    # Landmark estimator config
+    estimator_config: ParticleFilterConfig | LeastSquaresConfig = Field(default_factory=LeastSquaresConfig, description="Configuration for the landmark estimator")
 
 class DefaultConfig(BaseModel):
     """Default configuration for the entire application"""
@@ -128,9 +145,9 @@ class DefaultConfig(BaseModel):
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig, description="Evaluation configuration")
     world: WorldConfig = Field(default_factory=WorldConfig, description="World configuration")
     particle_filter: ParticleFilterConfig = Field(default_factory=ParticleFilterConfig, description="Particle filter configuration")
+    least_squares: LeastSquaresConfig = Field(default_factory=LeastSquaresConfig, description="Least Squares estimator configuration")
     visualization: VisualizationConfig = Field(default_factory=VisualizationConfig, description="Visualization configuration")
     cuda_device: str = Field("cpu", description="CUDA device to use (e.g., 'cuda:0', 'cuda:1', 'cpu')")
-
 
 default_config = DefaultConfig()
 
@@ -141,7 +158,7 @@ vast_config.training.save_interval = 5000
 vast_config.particle_filter.num_particles = 5000
 vast_config.world.randomize_agent_initial_location = True
 vast_config.world.randomize_landmark_initial_location = True
-vast_config.world.randomize_landmark_initial_velocity = True # Example: Enable landmark velocity randomization
+vast_config.world.randomize_landmark_initial_velocity = True 
 
 CONFIGS: Dict[str, DefaultConfig] = {
     "default": default_config,

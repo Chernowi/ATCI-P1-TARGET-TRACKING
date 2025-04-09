@@ -37,15 +37,15 @@ def main(config_name: str, use_n_step: bool = False, cuda_device: str = None):
     agent.save_model(final_model_path)
     print(f"Final model saved to {final_model_path}")
 
-    print("\nEvaluating SAC agent...")
-    if use_n_step:
-        evaluate_n_step_sac(agent=agent, config=config)
-    else:
-        evaluate_sac(agent=agent, config=config)
+    # print("\nEvaluating SAC agent...")
+    # if use_n_step:
+    #     evaluate_n_step_sac(agent=agent, config=config)
+    # else:
+    #     evaluate_sac(agent=agent, config=config)
 
-    print(
-        f"\nTraining and evaluation complete. Find output in the {config.visualization.save_dir} directory.")
-    print("You can convert the frames to a video using ffmpeg or view the generated GIFs.")
+    # print(
+    #     f"\nTraining and evaluation complete. Find output in the {config.visualization.save_dir} directory.")
+    # print("You can convert the frames to a video using ffmpeg or view the generated GIFs.")
 
 
 if __name__ == "__main__":
