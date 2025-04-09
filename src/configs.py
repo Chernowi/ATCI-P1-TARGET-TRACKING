@@ -17,6 +17,26 @@ class SACConfig(BaseModel):
     auto_tune_alpha: bool = Field(True, description="Whether to auto-tune the alpha parameter")
 
 
+class PPOConfig(BaseModel):
+    """Configuration for the PPO agent"""
+    state_dim: int = Field(8, description="State dimension (agent_x, agent_y, agent_vx, agent_vy, landmark_x, landmark_y, landmark_depth, current_range)")
+    action_dim: int = Field(2, description="Action dimension (vx, vy)")
+    action_scale: float = Field(1, description="Scale actions to reasonable velocity range")
+    hidden_dim: int = Field(256, description="Hidden layer dimension")
+    log_std_min: int = Field(-20, description="Minimum log std for action distribution")
+    log_std_max: int = Field(2, description="Maximum log std for action distribution")
+    actor_lr: float = Field(3e-4, description="Actor learning rate")
+    critic_lr: float = Field(1e-3, description="Critic learning rate")
+    gamma: float = Field(0.99, description="Discount factor")
+    gae_lambda: float = Field(0.95, description="GAE lambda parameter")
+    policy_clip: float = Field(0.2, description="PPO clipping parameter")
+    n_epochs: int = Field(10, description="Number of optimization epochs per update")
+    entropy_coef: float = Field(0.01, description="Entropy coefficient for exploration")
+    value_coef: float = Field(0.5, description="Value loss coefficient")
+    batch_size: int = Field(64, description="Batch size for training")
+    steps_per_update: int = Field(2048, description="Environment steps between PPO updates")
+
+
 class ReplayBufferConfig(BaseModel):
     """Configuration for the replay buffer"""
     capacity: int = Field(1000000, description="Maximum capacity of replay buffer") # Increased capacity
@@ -25,7 +45,7 @@ class ReplayBufferConfig(BaseModel):
 
 class TrainingConfig(BaseModel):
     """Configuration for training"""
-    num_episodes: int = Field(1000, description="Number of episodes to train")
+    num_episodes: int = Field(10000, description="Number of episodes to train")
     max_steps: int = Field(250, description="Maximum steps per episode")
     batch_size: int = Field(256, description="Batch size for training") # Increased batch size
     save_interval: int = Field(100, description="Interval (in episodes) for saving models")
@@ -141,6 +161,7 @@ class WorldConfig(BaseModel):
 class DefaultConfig(BaseModel):
     """Default configuration for the entire application"""
     sac: SACConfig = Field(default_factory=SACConfig, description="SAC agent configuration")
+    ppo: PPOConfig = Field(default_factory=PPOConfig, description="PPO agent configuration")
     replay_buffer: ReplayBufferConfig = Field(default_factory=ReplayBufferConfig, description="Replay buffer configuration")
     training: TrainingConfig = Field(default_factory=TrainingConfig, description="Training configuration")
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig, description="Evaluation configuration")
@@ -149,6 +170,7 @@ class DefaultConfig(BaseModel):
     least_squares: LeastSquaresConfig = Field(default_factory=LeastSquaresConfig, description="Least Squares estimator configuration")
     visualization: VisualizationConfig = Field(default_factory=VisualizationConfig, description="Visualization configuration")
     cuda_device: str = Field("cpu", description="CUDA device to use (e.g., 'cuda:0', 'cuda:1', 'cpu')")
+    algorithm: str = Field("sac", description="RL algorithm to use ('sac' or 'ppo')")
 
 default_config = DefaultConfig()
 
