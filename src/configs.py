@@ -39,7 +39,7 @@ class PPOConfig(BaseModel):
 
 class ReplayBufferConfig(BaseModel):
     """Configuration for the replay buffer"""
-    capacity: int = Field(1000000, description="Maximum capacity of replay buffer") # Increased capacity
+    capacity: int = Field(100000, description="Maximum capacity of replay buffer") # Increased capacity
     gamma: float = Field(0.99, description="Discount factor for returns")
 
 
