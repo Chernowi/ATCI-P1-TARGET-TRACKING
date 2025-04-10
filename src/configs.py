@@ -1,4 +1,4 @@
-from typing import Dict, Literal, Tuple
+from typing import Dict, Literal, Tuple, List
 from pydantic import BaseModel, Field
 
 
@@ -7,7 +7,7 @@ class SACConfig(BaseModel):
     state_dim: int = Field(8, description="State dimension (agent_x, agent_y, agent_vx, agent_vy, landmark_x, landmark_y, landmark_depth, current_range)")
     action_dim: int = Field(2, description="Action dimension (vx, vy)")
     action_scale: float = Field(2, description="Scale actions to reasonable velocity range")
-    hidden_dim: int = Field(256, description="Hidden layer dimension")
+    hidden_dims: List[int] = Field([256, 256], description="List of hidden layer dimensions")
     log_std_min: int = Field(-20, description="Minimum log std for action distribution")
     log_std_max: int = Field(2, description="Maximum log std for action distribution")
     lr: float = Field(3e-4, description="Learning rate")
@@ -182,6 +182,7 @@ vast_config.particle_filter.num_particles = 5000
 vast_config.world.randomize_agent_initial_location = True
 vast_config.world.randomize_landmark_initial_location = True
 vast_config.world.randomize_landmark_initial_velocity = True
+vast_config.sac.hidden_dims = [512, 512, 256] # Example of deeper SAC network
 
 CONFIGS: Dict[str, DefaultConfig] = {
     "default": default_config,

@@ -45,19 +45,23 @@ class Actor(nn.Module):
     def __init__(self, config: SACConfig):
         """Initialize actor network using configuration."""
         super(Actor, self).__init__()
-        self.fc1 = nn.Linear(config.state_dim, config.hidden_dim)
-        self.fc2 = nn.Linear(config.hidden_dim, config.hidden_dim)
+        self.layers = nn.ModuleList()
+        input_dim = config.state_dim
+        for hidden_dim in config.hidden_dims:
+            self.layers.append(nn.Linear(input_dim, hidden_dim))
+            input_dim = hidden_dim
 
-        self.mean = nn.Linear(config.hidden_dim, config.action_dim)
-        self.log_std = nn.Linear(config.hidden_dim, config.action_dim)
+        self.mean = nn.Linear(config.hidden_dims[-1], config.action_dim)
+        self.log_std = nn.Linear(config.hidden_dims[-1], config.action_dim)
 
         self.log_std_min = config.log_std_min
         self.log_std_max = config.log_std_max
 
     def forward(self, state):
         """Forward pass through the network."""
-        x = F.relu(self.fc1(state))
-        x = F.relu(self.fc2(x))
+        x = state
+        for layer in self.layers:
+            x = F.relu(layer(x))
 
         mean = self.mean(x)
         log_std = self.log_std(x)
@@ -91,40 +95,50 @@ class Critic(nn.Module):
         super(Critic, self).__init__()
         state_dim = config.state_dim
         action_dim = config.action_dim
-        hidden_dim = config.hidden_dim
+        hidden_dims = config.hidden_dims
 
         # Q1 architecture
-        self.fc1 = nn.Linear(state_dim + action_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
-        self.q1 = nn.Linear(hidden_dim, 1)
+        self.q1_layers = nn.ModuleList()
+        input_dim = state_dim + action_dim
+        for hidden_dim in hidden_dims:
+            self.q1_layers.append(nn.Linear(input_dim, hidden_dim))
+            input_dim = hidden_dim
+        self.q1_out = nn.Linear(hidden_dims[-1], 1)
 
-        # Q2 architecture (to mitigate overestimation)
-        self.fc3 = nn.Linear(state_dim + action_dim, hidden_dim)
-        self.fc4 = nn.Linear(hidden_dim, hidden_dim)
-        self.q2 = nn.Linear(hidden_dim, 1)
+        # Q2 architecture
+        self.q2_layers = nn.ModuleList()
+        input_dim = state_dim + action_dim
+        for hidden_dim in hidden_dims:
+            self.q2_layers.append(nn.Linear(input_dim, hidden_dim))
+            input_dim = hidden_dim
+        self.q2_out = nn.Linear(hidden_dims[-1], 1)
+
 
     def forward(self, state, action):
         """Forward pass returning both Q-values."""
-        sa = torch.cat([state, action], 1)  # Concatenate state and action
+        sa = torch.cat([state, action], 1)
 
         # Q1 path
-        x1 = F.relu(self.fc1(sa))
-        x1 = F.relu(self.fc2(x1))
-        q1 = self.q1(x1)
+        x1 = sa
+        for layer in self.q1_layers:
+            x1 = F.relu(layer(x1))
+        q1 = self.q1_out(x1)
 
         # Q2 path
-        x2 = F.relu(self.fc3(sa))
-        x2 = F.relu(self.fc4(x2))
-        q2 = self.q2(x2)
+        x2 = sa
+        for layer in self.q2_layers:
+            x2 = F.relu(layer(x2))
+        q2 = self.q2_out(x2)
 
         return q1, q2
 
     def q1_forward(self, state, action):
-        """Forward pass returning only Q1 value (potentially useful for TD3)."""
+        """Forward pass returning only Q1 value."""
         sa = torch.cat([state, action], 1)
-        x1 = F.relu(self.fc1(sa))
-        x1 = F.relu(self.fc2(x1))
-        q1 = self.q1(x1)
+        x1 = sa
+        for layer in self.q1_layers:
+            x1 = F.relu(layer(x1))
+        q1 = self.q1_out(x1)
         return q1
 
 
