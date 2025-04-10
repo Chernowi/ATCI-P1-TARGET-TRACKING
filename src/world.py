@@ -112,7 +112,7 @@ class World():
             self.error_dist = np.sqrt((est_loc.x - true_loc.x)**2 + (est_loc.y - true_loc.y)**2)
         else: self.error_dist = float('inf')
 
-    def step(self, action: Velocity, training: bool = True):
+    def step(self, action: Velocity, training: bool = True, terminal_step: bool = False):
         """
         Advance the world state by one time step.
 
@@ -139,10 +139,10 @@ class World():
         self.pf_update_time = time.time() - pf_start_time
         
         self.reward, self.done = 0.0, False
-        if training:
-            self._calculate_reward(noisy_range)  # Use noisy range for reward calculation
 
-    def _calculate_reward(self, measurement: float):
+        self._calculate_reward(noisy_range, terminal_step=terminal_step)  # Use noisy range for reward calculation
+
+    def _calculate_reward(self, measurement: float, terminal_step: bool):
         self._update_error_dist()
         
         # Calculate variables needed for rewards
@@ -172,9 +172,8 @@ class World():
         
         # 3. Terminal reward
         terminal_reward = 0.0
-        if current_distance < min_distance or current_distance > max_distance:
+        if terminal_step and (current_distance < min_distance or current_distance > max_distance):
             terminal_reward = -100.0
-            self.done = True
 
         # Calculate final reward
         self.reward = distance_reward + error_reward + terminal_reward

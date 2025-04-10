@@ -6,7 +6,7 @@ class SACConfig(BaseModel):
     """Configuration for the SAC agent"""
     state_dim: int = Field(8, description="State dimension (agent_x, agent_y, agent_vx, agent_vy, landmark_x, landmark_y, landmark_depth, current_range)")
     action_dim: int = Field(2, description="Action dimension (vx, vy)")
-    action_scale: float = Field(1, description="Scale actions to reasonable velocity range")
+    action_scale: float = Field(2, description="Scale actions to reasonable velocity range")
     hidden_dim: int = Field(256, description="Hidden layer dimension")
     log_std_min: int = Field(-20, description="Minimum log std for action distribution")
     log_std_max: int = Field(2, description="Maximum log std for action distribution")
@@ -25,13 +25,13 @@ class PPOConfig(BaseModel):
     hidden_dim: int = Field(256, description="Hidden layer dimension")
     log_std_min: int = Field(-20, description="Minimum log std for action distribution")
     log_std_max: int = Field(2, description="Maximum log std for action distribution")
-    actor_lr: float = Field(1.5e-4, description="Actor learning rate")
+    actor_lr: float = Field(5e-6, description="Actor learning rate")
     critic_lr: float = Field(1e-3, description="Critic learning rate")
     gamma: float = Field(0.99, description="Discount factor")
     gae_lambda: float = Field(0.95, description="GAE lambda parameter")
-    policy_clip: float = Field(0.15, description="PPO clipping parameter")
+    policy_clip: float = Field(0.05, description="PPO clipping parameter")
     n_epochs: int = Field(3, description="Number of optimization epochs per update")
-    entropy_coef: float = Field(0.01, description="Entropy coefficient for exploration")
+    entropy_coef: float = Field(0.015, description="Entropy coefficient for exploration")
     value_coef: float = Field(0.5, description="Value loss coefficient")
     batch_size: int = Field(64, description="Batch size for training")
     steps_per_update: int = Field(8192, description="Environment steps between PPO updates")
@@ -45,7 +45,7 @@ class ReplayBufferConfig(BaseModel):
 
 class TrainingConfig(BaseModel):
     """Configuration for training"""
-    num_episodes: int = Field(10000, description="Number of episodes to train")
+    num_episodes: int = Field(200, description="Number of episodes to train")
     max_steps: int = Field(250, description="Maximum steps per episode")
     batch_size: int = Field(256, description="Batch size for training") # Increased batch size
     save_interval: int = Field(100, description="Interval (in episodes) for saving models")
@@ -78,9 +78,9 @@ class Velocity(BaseModel):
 
 class RandomizationRange(BaseModel):
     """Defines ranges for random initialization of position"""
-    x_range: Tuple[float, float] = Field((-50.0, 50.0), description="Min/Max X range for randomization")
-    y_range: Tuple[float, float] = Field((-50.0, 50.0), description="Min/Max Y range for randomization")
-    depth_range: Tuple[float, float] = Field((-50.0, 50.0), description="Min/Max Depth range for randomization")
+    x_range: Tuple[float, float] = Field((-100.0, 100.0), description="Min/Max X range for randomization")
+    y_range: Tuple[float, float] = Field((-100.0, 100.0), description="Min/Max Y range for randomization")
+    depth_range: Tuple[float, float] = Field((0, 300), description="Min/Max Depth range for randomization")
 
 class VelocityRandomizationRange(BaseModel):
     """Defines ranges for random initialization of velocity"""
@@ -146,12 +146,12 @@ class WorldConfig(BaseModel):
     success_bonus: float = Field(100.0, description="Bonus reward upon reaching success threshold")
     out_of_range_penalty: float = Field(100.0, description="Penalty if range exceeds threshold")
     out_of_range_threshold: float = Field(100.0, description="Range threshold for out_of_range_penalty")
-    range_measurement_base_noise: float = 0.1  # Base noise level in meters
-    range_measurement_distance_factor: float = 0.05  # Noise increases by 5% of distance
+    range_measurement_base_noise: float = 1  # Base noise level in meters
+    range_measurement_distance_factor: float = 0.01  # Noise increases by 5% of distance
 
     # Reward function parameters
-    reward_scale: float = 5.0
-    distance_threshold: float = 10.0
+    reward_scale: float = 0.01
+    distance_threshold: float = 50.0
     error_threshold: float = 5.0
     min_safe_distance: float = 2.0
 

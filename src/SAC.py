@@ -383,7 +383,7 @@ def train_sac(config: DefaultConfig, use_multi_gpu: bool = False):
                 x=action_scaled[0], y=action_scaled[1], z=0.0)
 
             step_start_time = time.time()
-            env.step(action_obj, training=True)
+            env.step(action_obj, training=True, terminal_step=step_in_episode==train_config.max_steps-1)
             step_time = time.time() - step_start_time
             episode_step_times.append(step_time)
 
