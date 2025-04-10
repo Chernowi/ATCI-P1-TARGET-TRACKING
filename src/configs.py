@@ -18,7 +18,7 @@ class SACConfig(BaseModel):
     use_rnn: bool = Field(True, description="Whether to use RNN layers in Actor/Critic")
     rnn_type: Literal['lstm', 'gru'] = Field('lstm', description="Type of RNN cell")
     rnn_hidden_size: int = Field(256, description="Hidden size of RNN layers")
-    rnn_num_layers: int = Field(1, description="Number of RNN layers")
+    rnn_num_layers: int = Field(10, description="Number of RNN layers")
     sequence_length: int = Field(10, description="Length of sequences for RNN training")
 
 
