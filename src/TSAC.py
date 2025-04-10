@@ -120,14 +120,28 @@ class Actor(nn.Module):
         mlp_input_dim = config.state_dim
         for hidden_dim in config.hidden_dims:
             linear_layer = nn.Linear(mlp_input_dim, hidden_dim)
+            # Initialize weights using Kaiming/He initialization
+            nn.init.kaiming_uniform_(linear_layer.weight, a=math.sqrt(5))
+            # Initialize bias
+            fan_in, _ = nn.init._calculate_fan_in_and_fan_out(linear_layer.weight)
+            bound = 1 / math.sqrt(fan_in)
+            nn.init.uniform_(linear_layer.bias, -bound, bound)
+            
             self.layers.append(linear_layer)
             if self.use_layer_norm:
                 self.layers.append(nn.LayerNorm(hidden_dim))
             self.layers.append(nn.ReLU())
             mlp_input_dim = hidden_dim
 
+        # Initialize mean output layer with smaller values
         self.mean = nn.Linear(config.hidden_dims[-1], config.action_dim)
+        nn.init.xavier_uniform_(self.mean.weight, gain=0.01)
+        nn.init.constant_(self.mean.bias, 0)
+        
+        # Initialize log_std output layer
         self.log_std = nn.Linear(config.hidden_dims[-1], config.action_dim)
+        nn.init.xavier_uniform_(self.log_std.weight, gain=0.01)
+        nn.init.constant_(self.log_std.bias, 0)
 
         self.log_std_min = config.log_std_min
         self.log_std_max = config.log_std_max
