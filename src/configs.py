@@ -7,7 +7,7 @@ class SACConfig(BaseModel):
     state_dim: int = Field(8, description="State dimension (agent_x, agent_y, agent_vx, agent_vy, landmark_x, landmark_y, landmark_depth, current_range)")
     action_dim: int = Field(2, description="Action dimension (vx, vy)")
     action_scale: float = Field(2, description="Scale actions to reasonable velocity range")
-    hidden_dims: List[int] = Field([256, 256], description="List of hidden layer dimensions")
+    hidden_dims: List[int] = Field([256, 256], description="List of hidden layer dimensions for MLP part")
     log_std_min: int = Field(-20, description="Minimum log std for action distribution")
     log_std_max: int = Field(2, description="Maximum log std for action distribution")
     lr: float = Field(3e-4, description="Learning rate")
@@ -15,6 +15,11 @@ class SACConfig(BaseModel):
     tau: float = Field(0.005, description="Target network update rate")
     alpha: float = Field(0.005, description="Temperature parameter")
     auto_tune_alpha: bool = Field(True, description="Whether to auto-tune the alpha parameter")
+    use_rnn: bool = Field(True, description="Whether to use RNN layers in Actor/Critic")
+    rnn_type: Literal['lstm', 'gru'] = Field('lstm', description="Type of RNN cell")
+    rnn_hidden_size: int = Field(256, description="Hidden size of RNN layers")
+    rnn_num_layers: int = Field(1, description="Number of RNN layers")
+    sequence_length: int = Field(10, description="Length of sequences for RNN training")
 
 
 class PPOConfig(BaseModel):
@@ -183,6 +188,10 @@ vast_config.world.randomize_agent_initial_location = True
 vast_config.world.randomize_landmark_initial_location = True
 vast_config.world.randomize_landmark_initial_velocity = True
 vast_config.sac.hidden_dims = [512, 512, 256] # Example of deeper SAC network
+vast_config.sac.use_rnn = True
+vast_config.sac.sequence_length = 16
+vast_config.sac.rnn_hidden_size = 512
+
 
 CONFIGS: Dict[str, DefaultConfig] = {
     "default": default_config,
