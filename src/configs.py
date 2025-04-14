@@ -1,8 +1,6 @@
 from typing import Dict, Literal, Tuple, List
 from pydantic import BaseModel, Field
 import math
-import numpy as np
-
 
 class SACConfig(BaseModel):
     """Configuration for the SAC agent"""
@@ -12,12 +10,12 @@ class SACConfig(BaseModel):
     hidden_dims: List[int] = Field([128, 128], description="List of hidden layer dimensions for MLP part")
     log_std_min: int = Field(-20, description="Minimum log std for action distribution")
     log_std_max: int = Field(2, description="Maximum log std for action distribution")
-    lr: float = Field(5e-4, description="Learning rate")
+    lr: float = Field(5e-5, description="Learning rate")
     gamma: float = Field(0.99, description="Discount factor")
     tau: float = Field(0.01, description="Target network update rate")
     alpha: float = Field(0.2, description="Temperature parameter (Initial value if auto-tuning)")
     auto_tune_alpha: bool = Field(True, description="Whether to auto-tune the alpha parameter")
-    use_rnn: bool = Field(False, description="Whether to use RNN layers in Actor/Critic")
+    use_rnn: bool = Field(True, description="Whether to use RNN layers in Actor/Critic")
     rnn_type: Literal['lstm', 'gru'] = Field('lstm', description="Type of RNN cell (Only used if use_rnn is True)")
     rnn_hidden_size: int = Field(128, description="Hidden size of RNN layers (Only used if use_rnn is True)")
     rnn_num_layers: int = Field(1, description="Number of RNN layers (Only used if use_rnn is True)")
@@ -67,8 +65,8 @@ class ReplayBufferConfig(BaseModel):
 class TrainingConfig(BaseModel):
     """Configuration for training"""
     num_episodes: int = Field(5000, description="Number of episodes to train")
-    max_steps: int = Field(300, description="Maximum steps per episode")
-    batch_size: int = Field(512, description="Batch size for training")
+    max_steps: int = Field(500, description="Maximum steps per episode")
+    batch_size: int = Field(1024, description="Batch size for training")
     save_interval: int = Field(100, description="Interval (in episodes) for saving models")
     log_frequency: int = Field(1, description="Frequency (in episodes) for logging to TensorBoard")
     models_dir: str = Field("sac_models", description="Directory for saving models")
@@ -174,7 +172,7 @@ class WorldConfig(BaseModel):
     # Reward function parameters
     reward_scale: float = 0.005
     distance_threshold: float = 50.0
-    error_threshold: float = 5.0
+    error_threshold: float = 1.0
     min_safe_distance: float = 2.0
 
     # Landmark estimator config
