@@ -123,6 +123,9 @@ class World():
         self.agent.velocity = action; self.agent.update_position(self.dt)
         self.true_landmark.update_position(self.dt)
         
+        if terminal_step:
+            self.done = True
+        
         # Get noisy range measurement
         noisy_range = self._get_noisy_range_measurement(self.agent.location, self.true_landmark.location)
         
@@ -166,7 +169,7 @@ class World():
         if position_error != float('inf') and position_error > error_threshold:
             error_reward = reward_scale * (0.5 - position_error / 100.0)  # Normalized to reasonable scale
         elif position_error != float('inf'):
-            error_reward = 1.0
+            error_reward = 10.0
         else:
             error_reward = 0.0  # No estimate available
         

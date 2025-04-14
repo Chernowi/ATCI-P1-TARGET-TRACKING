@@ -8,18 +8,18 @@ class SACConfig(BaseModel):
     """Configuration for the SAC agent"""
     state_dim: int = Field(8, description="State dimension (agent_x, agent_y, agent_vx, agent_vy, landmark_x, landmark_y, landmark_depth, current_range)")
     action_dim: int = Field(2, description="Action dimension (vx, vy)")
-    action_scale: float = Field(2, description="Scale actions to reasonable velocity range")
-    hidden_dims: List[int] = Field([256, 256], description="List of hidden layer dimensions for MLP part")
+    action_scale: float = Field(1, description="Scale actions to reasonable velocity range")
+    hidden_dims: List[int] = Field([128, 128], description="List of hidden layer dimensions for MLP part")
     log_std_min: int = Field(-20, description="Minimum log std for action distribution")
     log_std_max: int = Field(2, description="Maximum log std for action distribution")
-    lr: float = Field(3e-4, description="Learning rate")
+    lr: float = Field(5e-4, description="Learning rate")
     gamma: float = Field(0.99, description="Discount factor")
-    tau: float = Field(0.005, description="Target network update rate")
+    tau: float = Field(0.01, description="Target network update rate")
     alpha: float = Field(0.2, description="Temperature parameter (Initial value if auto-tuning)") # Default value for SAC
     auto_tune_alpha: bool = Field(True, description="Whether to auto-tune the alpha parameter")
-    use_rnn: bool = Field(False, description="Whether to use RNN layers in Actor/Critic (NOTE: Set to False for standard SAC/T-SAC MLP/Transformer usage)")
+    use_rnn: bool = Field(True, description="Whether to use RNN layers in Actor/Critic (NOTE: Set to False for standard SAC/T-SAC MLP/Transformer usage)")
     rnn_type: Literal['lstm', 'gru'] = Field('lstm', description="Type of RNN cell (Only used if use_rnn is True)")
-    rnn_hidden_size: int = Field(256, description="Hidden size of RNN layers (Only used if use_rnn is True)")
+    rnn_hidden_size: int = Field(128, description="Hidden size of RNN layers (Only used if use_rnn is True)")
     rnn_num_layers: int = Field(1, description="Number of RNN layers (Only used if use_rnn is True)")
     sequence_length: int = Field(10, description="Length of sequences for RNN training (Only used if use_rnn is True)")
 
@@ -54,7 +54,7 @@ class PPOConfig(BaseModel):
     n_epochs: int = Field(3, description="Number of optimization epochs per update")
     entropy_coef: float = Field(0.015, description="Entropy coefficient for exploration")
     value_coef: float = Field(0.5, description="Value loss coefficient")
-    batch_size: int = Field(64, description="Batch size for training")
+    batch_size: int = Field(1024, description="Batch size for training")
     steps_per_update: int = Field(8192, description="Environment steps between PPO updates")
 
 
@@ -66,13 +66,13 @@ class ReplayBufferConfig(BaseModel):
 
 class TrainingConfig(BaseModel):
     """Configuration for training"""
-    num_episodes: int = Field(200, description="Number of episodes to train")
-    max_steps: int = Field(250, description="Maximum steps per episode")
-    batch_size: int = Field(256, description="Batch size for training") # Increased batch size
+    num_episodes: int = Field(5000, description="Number of episodes to train")
+    max_steps: int = Field(300, description="Maximum steps per episode")
+    batch_size: int = Field(512, description="Batch size for training") # Increased batch size
     save_interval: int = Field(100, description="Interval (in episodes) for saving models")
-    log_frequency: int = Field(10, description="Frequency (in episodes) for logging to TensorBoard")
+    log_frequency: int = Field(1, description="Frequency (in episodes) for logging to TensorBoard")
     models_dir: str = Field("sac_models", description="Directory for saving models") # Keep same dir for now
-    learning_starts: int = Field(1000, description="Number of steps to collect before starting training updates")
+    learning_starts: int = Field(8000, description="Number of steps to collect before starting training updates")
     train_freq: int = Field(1, description="Update the policy every n environment steps")
     gradient_steps: int = Field(1, description="How many gradient steps to perform when training frequency is met")
 
@@ -128,7 +128,7 @@ class ParticleFilterConfig(BaseModel):
 
 class LeastSquaresConfig(BaseModel):
     """Configuration for the Least Squares estimator"""
-    history_size: int = Field(30, description="Number of measurements to keep in history")
+    history_size: int = Field(10, description="Number of measurements to keep in history")
     min_points_required: int = Field(3, description="Minimum number of points required for estimation")
     position_buffer_size: int = Field(5, description="Number of position estimates to keep for velocity calculation")
     velocity_smoothing: int = Field(3, description="Number of position points to use for velocity smoothing")
@@ -167,11 +167,11 @@ class WorldConfig(BaseModel):
     success_bonus: float = Field(100.0, description="Bonus reward upon reaching success threshold")
     out_of_range_penalty: float = Field(100.0, description="Penalty if range exceeds threshold")
     out_of_range_threshold: float = Field(100.0, description="Range threshold for out_of_range_penalty")
-    range_measurement_base_noise: float = 1  # Base noise level in meters
+    range_measurement_base_noise: float = 0.1  # Base noise level in meters
     range_measurement_distance_factor: float = 0.01  # Noise increases by 1% of distance (Adjusted from 5%)
 
     # Reward function parameters
-    reward_scale: float = 0.01
+    reward_scale: float = 0.005
     distance_threshold: float = 50.0
     error_threshold: float = 5.0
     min_safe_distance: float = 2.0
@@ -191,7 +191,7 @@ class DefaultConfig(BaseModel):
     particle_filter: ParticleFilterConfig = Field(default_factory=ParticleFilterConfig, description="Particle filter configuration")
     least_squares: LeastSquaresConfig = Field(default_factory=LeastSquaresConfig, description="Least Squares estimator configuration")
     visualization: VisualizationConfig = Field(default_factory=VisualizationConfig, description="Visualization configuration")
-    cuda_device: str = Field("cpu", description="CUDA device to use (e.g., 'cuda:0', 'cuda:1', 'cpu')")
+    cuda_device: str = Field("cuda:0", description="CUDA device to use (e.g., 'cuda:0', 'cuda:1', 'cpu')")
     algorithm: str = Field("sac", description="RL algorithm to use ('sac', 'ppo', or 'tsac')") # Add tsac option
 
 

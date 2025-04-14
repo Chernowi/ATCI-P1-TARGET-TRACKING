@@ -2,9 +2,8 @@ import argparse
 import os
 import torch
 
-from SAC import train_sac, evaluate_sac
-from PPO import train_ppo, evaluate_ppo
-from TSAC import train_tsac, evaluate_tsac # Import T-SAC functions
+from SAC import train_sac
+
 from configs import CONFIGS, DefaultConfig
 
 
@@ -42,34 +41,34 @@ def main(config_name: str, cuda_device: str = None, algorithm: str = None):
     print(f"Models will be saved in: {os.path.abspath(model_dir)}")
 
     # Select algorithm based on the effective choice
-    if effective_algorithm.lower() == "ppo":
-        print("Training PPO agent...")
-        agent, _ = train_ppo(config=config, use_multi_gpu=use_multi_gpu)
-        final_model_path = os.path.join(model_dir, "ppo_final.pt")
-        agent.save_model(final_model_path)
-        print(f"Final PPO model saved to {final_model_path}")
-        print("\nEvaluating PPO agent...")
-        evaluate_ppo(agent=agent, config=config)
+    # if effective_algorithm.lower() == "ppo":
+    #     print("Training PPO agent...")
+    #     agent, _ = train_ppo(config=config, use_multi_gpu=use_multi_gpu)
+    #     final_model_path = os.path.join(model_dir, "ppo_final.pt")
+    #     agent.save_model(final_model_path)
+    #     print(f"Final PPO model saved to {final_model_path}")
+    #     print("\nEvaluating PPO agent...")
+    #     # evaluate_ppo(agent=agent, config=config)
 
-    elif effective_algorithm.lower() == "tsac": # Add T-SAC case
-        print("Training T-SAC agent...")
-        agent, _ = train_tsac(config=config, use_multi_gpu=use_multi_gpu)
-        final_model_path = os.path.join(model_dir, "tsac_final.pt") # Save as tsac_final
-        agent.save_model(final_model_path)
-        print(f"Final T-SAC model saved to {final_model_path}")
-        print("\nEvaluating T-SAC agent...")
-        evaluate_tsac(agent=agent, config=config) # Use evaluate_tsac
+    # elif effective_algorithm.lower() == "tsac": # Add T-SAC case
+    #     print("Training T-SAC agent...")
+    #     agent, _ = train_tsac(config=config, use_multi_gpu=use_multi_gpu)
+    #     final_model_path = os.path.join(model_dir, "tsac_final.pt") # Save as tsac_final
+    #     agent.save_model(final_model_path)
+    #     print(f"Final T-SAC model saved to {final_model_path}")
+    #     print("\nEvaluating T-SAC agent...")
+    #     # evaluate_tsac(agent=agent, config=config) # Use evaluate_tsac
 
-    elif effective_algorithm.lower() == "sac": # Default/fallback to SAC
-        print("Training SAC agent...")
-        agent, _ = train_sac(config=config, use_multi_gpu=use_multi_gpu)
-        final_model_path = os.path.join(model_dir, "sac_final.pt")
-        agent.save_model(final_model_path)
-        print(f"Final SAC model saved to {final_model_path}")
-        print("\nEvaluating SAC agent...")
-        evaluate_sac(agent=agent, config=config)
-    else:
-        raise ValueError(f"Unknown algorithm specified: {effective_algorithm}. Choose 'sac', 'ppo', or 'tsac'.")
+    # elif effective_algorithm.lower() == "sac": # Default/fallback to SAC
+    print("Training SAC agent...")
+    agent, _ = train_sac(config=config, use_multi_gpu=use_multi_gpu)
+    final_model_path = os.path.join(model_dir, "sac_final.pt")
+    agent.save_model(final_model_path)
+    print(f"Final SAC model saved to {final_model_path}")
+    print("\nEvaluating SAC agent...")
+        # evaluate_sac(agent=agent, config=config)
+    # else:
+    #     raise ValueError(f"Unknown algorithm specified: {effective_algorithm}. Choose 'sac', 'ppo', or 'tsac'.")
 
 
     print(
