@@ -1,23 +1,23 @@
-# --- START OF FILE configs.py ---
-
 from typing import Dict, Literal, Tuple, List
 from pydantic import BaseModel, Field
+import math
+import numpy as np
 
 
 class SACConfig(BaseModel):
     """Configuration for the SAC agent"""
     state_dim: int = Field(8, description="State dimension (agent_x, agent_y, agent_vx, agent_vy, landmark_x, landmark_y, landmark_depth, current_range)")
-    action_dim: int = Field(2, description="Action dimension (vx, vy)")
-    action_scale: float = Field(1, description="Scale actions to reasonable velocity range")
+    action_dim: int = Field(1, description="Action dimension (yaw_change)") # Changed to 1
+    action_scale: float = Field(math.pi / 4, description="Maximum magnitude of yaw change action (scales the [-1, 1] output)") # Re-purposed for yaw
     hidden_dims: List[int] = Field([128, 128], description="List of hidden layer dimensions for MLP part")
     log_std_min: int = Field(-20, description="Minimum log std for action distribution")
     log_std_max: int = Field(2, description="Maximum log std for action distribution")
     lr: float = Field(5e-4, description="Learning rate")
     gamma: float = Field(0.99, description="Discount factor")
     tau: float = Field(0.01, description="Target network update rate")
-    alpha: float = Field(0.2, description="Temperature parameter (Initial value if auto-tuning)") # Default value for SAC
+    alpha: float = Field(0.2, description="Temperature parameter (Initial value if auto-tuning)")
     auto_tune_alpha: bool = Field(True, description="Whether to auto-tune the alpha parameter")
-    use_rnn: bool = Field(True, description="Whether to use RNN layers in Actor/Critic (NOTE: Set to False for standard SAC/T-SAC MLP/Transformer usage)")
+    use_rnn: bool = Field(False, description="Whether to use RNN layers in Actor/Critic")
     rnn_type: Literal['lstm', 'gru'] = Field('lstm', description="Type of RNN cell (Only used if use_rnn is True)")
     rnn_hidden_size: int = Field(128, description="Hidden size of RNN layers (Only used if use_rnn is True)")
     rnn_num_layers: int = Field(1, description="Number of RNN layers (Only used if use_rnn is True)")
@@ -26,23 +26,23 @@ class SACConfig(BaseModel):
 
 class TSACConfig(SACConfig):
     """Configuration for the Transformer-SAC agent, inheriting from SACConfig"""
-    # Override or add Transformer/N-step specific parameters
-    use_rnn: bool = Field(False, description="Ensure RNN is disabled for T-SAC's Transformer Critic") # Explicitly disable RNN
-    sequence_length: int = Field(10, description="Action chunk length (N) for N-step returns and Transformer input") # N in paper
+    use_rnn: bool = Field(False, description="Ensure RNN is disabled for T-SAC's Transformer Critic")
+    action_dim: int = Field(1, description="Action dimension (yaw_change)") # Changed to 1
+    action_scale: float = Field(math.pi / 4, description="Maximum magnitude of yaw change action (scales the [-1, 1] output)") # Re-purposed for yaw
+    sequence_length: int = Field(10, description="Action chunk length (N) for N-step returns and Transformer input")
     embedding_dim: int = Field(128, description="Embedding dimension for states and actions in Transformer Critic")
     transformer_n_layers: int = Field(2, description="Number of Transformer encoder layers in Critic")
     transformer_n_heads: int = Field(4, description="Number of attention heads in Transformer Critic")
     transformer_hidden_dim: int = Field(512, description="Hidden dimension within Transformer layers (FeedForward network)")
     use_layer_norm_actor: bool = Field(True, description="Apply Layer Normalization in Actor MLP layers")
-    # Alpha defaults inherited, can be overridden if needed for T-SAC specifically
-    alpha: float = Field(0.1, description="Temperature parameter (Initial value if auto-tuning)") # T-SAC might need different tuning
+    alpha: float = Field(0.1, description="Temperature parameter (Initial value if auto-tuning)")
 
 
 class PPOConfig(BaseModel):
     """Configuration for the PPO agent"""
     state_dim: int = Field(8, description="State dimension (agent_x, agent_y, agent_vx, agent_vy, landmark_x, landmark_y, landmark_depth, current_range)")
-    action_dim: int = Field(2, description="Action dimension (vx, vy)")
-    action_scale: float = Field(1, description="Scale actions to reasonable velocity range")
+    action_dim: int = Field(1, description="Action dimension (yaw_change)") # Changed to 1
+    action_scale: float = Field(math.pi / 4, description="Maximum magnitude of yaw change action (scales the [-1, 1] output)") # Re-purposed for yaw
     hidden_dim: int = Field(256, description="Hidden layer dimension")
     log_std_min: int = Field(-20, description="Minimum log std for action distribution")
     log_std_max: int = Field(2, description="Maximum log std for action distribution")
@@ -60,7 +60,7 @@ class PPOConfig(BaseModel):
 
 class ReplayBufferConfig(BaseModel):
     """Configuration for the replay buffer"""
-    capacity: int = Field(100000, description="Maximum capacity of replay buffer") # Increased capacity
+    capacity: int = Field(100000, description="Maximum capacity of replay buffer")
     gamma: float = Field(0.99, description="Discount factor for returns")
 
 
@@ -68,10 +68,10 @@ class TrainingConfig(BaseModel):
     """Configuration for training"""
     num_episodes: int = Field(5000, description="Number of episodes to train")
     max_steps: int = Field(300, description="Maximum steps per episode")
-    batch_size: int = Field(512, description="Batch size for training") # Increased batch size
+    batch_size: int = Field(512, description="Batch size for training")
     save_interval: int = Field(100, description="Interval (in episodes) for saving models")
     log_frequency: int = Field(1, description="Frequency (in episodes) for logging to TensorBoard")
-    models_dir: str = Field("sac_models", description="Directory for saving models") # Keep same dir for now
+    models_dir: str = Field("sac_models", description="Directory for saving models")
     learning_starts: int = Field(8000, description="Number of steps to collect before starting training updates")
     train_freq: int = Field(1, description="Update the policy every n environment steps")
     gradient_steps: int = Field(1, description="How many gradient steps to perform when training frequency is met")
@@ -115,7 +115,6 @@ class ParticleFilterConfig(BaseModel):
     num_particles: int = Field(1000, description="Number of particles")
     initial_range_stddev: float = Field(0.02, description="Standard deviation for initial particle spread")
     initial_velocity_guess: float = Field(0.1, description="Initial velocity guess for particles")
-    estimation_method: Literal["range", "area"] = Field("range", description="Method for estimation (range or area)")
     max_particle_range: float = Field(250.0, description="Maximum range for particles (used in area method or init)")
     process_noise_pos: float = Field(0.02, description="Process noise for position")
     process_noise_orient: float = Field(0.2, description="Process noise for orientation")
@@ -148,27 +147,29 @@ class WorldConfig(BaseModel):
     """Configuration for the world"""
     dt: float = Field(1.0, description="Time step")
     success_threshold: float = Field(0.5, description="Distance threshold for successful landmark detection and early termination")
+    agent_speed: float = Field(1.5, description="Constant speed of the agent")
+    yaw_angle_range: Tuple[float, float] = Field((-math.pi / 4, math.pi / 4), description="Range of possible yaw angle changes per step [-max_change, max_change]")
 
     agent_initial_location: Position = Field(default_factory=Position, description="Initial agent position (used if randomization is false)")
     landmark_initial_location: Position = Field(default_factory=lambda: Position(x=42, y=42, depth=42), description="Initial landmark position (used if randomization is false)")
 
-    agent_initial_velocity: Velocity = Field(default_factory=Velocity, description="Initial agent velocity")
+    # Agent initial velocity is now determined by initial heading and speed
     landmark_initial_velocity: Velocity = Field(default_factory=Velocity, description="Initial landmark velocity (used if randomization is false)")
 
     randomize_agent_initial_location: bool = Field(True, description="Randomize agent initial location?")
     randomize_landmark_initial_location: bool = Field(True, description="Randomize landmark initial location?")
-    randomize_landmark_initial_velocity: bool = Field(False, description="Randomize landmark initial velocity?") # Default to False
+    randomize_landmark_initial_velocity: bool = Field(False, description="Randomize landmark initial velocity?")
 
     agent_randomization_ranges: RandomizationRange = Field(default_factory=lambda: RandomizationRange(depth_range=(0.0, 0.0)), description="Ranges for agent location randomization")
     landmark_randomization_ranges: RandomizationRange = Field(default_factory=RandomizationRange, description="Ranges for landmark location randomization")
     landmark_velocity_randomization_ranges: VelocityRandomizationRange = Field(default_factory=VelocityRandomizationRange, description="Ranges for landmark velocity randomization")
 
-    step_penalty: float = Field(0.1, description="Penalty subtracted each step")
-    success_bonus: float = Field(100.0, description="Bonus reward upon reaching success threshold")
-    out_of_range_penalty: float = Field(100.0, description="Penalty if range exceeds threshold")
+    step_penalty: float = Field(0.1, description="Penalty subtracted each step") # Keep for potential use, though current reward func doesn't use it explicitly
+    success_bonus: float = Field(100.0, description="Bonus reward upon reaching success threshold") # Keep for potential use
+    out_of_range_penalty: float = Field(100.0, description="Penalty if range exceeds threshold") # Keep for potential use
     out_of_range_threshold: float = Field(100.0, description="Range threshold for out_of_range_penalty")
-    range_measurement_base_noise: float = 0.1  # Base noise level in meters
-    range_measurement_distance_factor: float = 0.01  # Noise increases by 1% of distance (Adjusted from 5%)
+    range_measurement_base_noise: float = 0.1
+    range_measurement_distance_factor: float = 0.01
 
     # Reward function parameters
     reward_scale: float = 0.005
@@ -182,17 +183,17 @@ class WorldConfig(BaseModel):
 class DefaultConfig(BaseModel):
     """Default configuration for the entire application"""
     sac: SACConfig = Field(default_factory=SACConfig, description="SAC agent configuration")
-    tsac: TSACConfig = Field(default_factory=TSACConfig, description="T-SAC agent configuration") # Add T-SAC config
+    tsac: TSACConfig = Field(default_factory=TSACConfig, description="T-SAC agent configuration")
     ppo: PPOConfig = Field(default_factory=PPOConfig, description="PPO agent configuration")
     replay_buffer: ReplayBufferConfig = Field(default_factory=ReplayBufferConfig, description="Replay buffer configuration")
     training: TrainingConfig = Field(default_factory=TrainingConfig, description="Training configuration")
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig, description="Evaluation configuration")
     world: WorldConfig = Field(default_factory=WorldConfig, description="World configuration")
-    particle_filter: ParticleFilterConfig = Field(default_factory=ParticleFilterConfig, description="Particle filter configuration")
+    particle_filter: ParticleFilterConfig = Field(default_factory=ParticleFilterConfig, description="Particle filter configuration") # Kept for vast config
     least_squares: LeastSquaresConfig = Field(default_factory=LeastSquaresConfig, description="Least Squares estimator configuration")
     visualization: VisualizationConfig = Field(default_factory=VisualizationConfig, description="Visualization configuration")
     cuda_device: str = Field("cuda:0", description="CUDA device to use (e.g., 'cuda:0', 'cuda:1', 'cpu')")
-    algorithm: str = Field("sac", description="RL algorithm to use ('sac', 'ppo', or 'tsac')") # Add tsac option
+    algorithm: str = Field("sac", description="RL algorithm to use ('sac', 'ppo', or 'tsac')")
 
 
 default_config = DefaultConfig()
@@ -200,54 +201,51 @@ default_config = DefaultConfig()
 # --- Standard SAC Config (Example) ---
 sac_default_config = DefaultConfig()
 sac_default_config.algorithm = "sac"
-# Keep sac_default_config.sac as default SACConfig
 
 
 # --- T-SAC Default Config (Example) ---
 tsac_default_config = DefaultConfig()
 tsac_default_config.algorithm = "tsac"
-# Modify tsac_default_config.tsac as needed
-tsac_default_config.tsac.sequence_length = 8 # Example sequence length
+tsac_default_config.tsac.sequence_length = 8
 tsac_default_config.tsac.embedding_dim = 128
 tsac_default_config.tsac.transformer_n_layers = 2
 tsac_default_config.tsac.transformer_n_heads = 4
 tsac_default_config.tsac.transformer_hidden_dim = 256
-tsac_default_config.tsac.lr = 1e-4 # T-SAC might need different LR
+tsac_default_config.tsac.lr = 1e-4
 tsac_default_config.tsac.alpha = 0.1
-# Ensure training config is suitable
-tsac_default_config.training.learning_starts = 2000 # May need more samples for sequences
-tsac_default_config.training.batch_size = 128 # May need smaller batch due to sequence memory
+tsac_default_config.training.learning_starts = 2000
+tsac_default_config.training.batch_size = 128
 
 
 # --- Vast Config (Example for large scale training, maybe T-SAC) ---
 vast_config = DefaultConfig()
-vast_config.algorithm = "tsac" # Example: Use T-SAC for vast config
+vast_config.algorithm = "tsac"
 vast_config.training.num_episodes = 50000
 vast_config.training.max_steps = 200
 vast_config.training.save_interval = 5000
-vast_config.training.batch_size = 128 # Adjust batch size
+vast_config.training.batch_size = 128
 vast_config.training.learning_starts = 5000
-vast_config.particle_filter.num_particles = 5000 # If using PF estimator
+# vast_config.world.estimator_config = vast_config.particle_filter # Example using PF for vast
+vast_config.particle_filter.num_particles = 5000
 vast_config.world.randomize_agent_initial_location = True
 vast_config.world.randomize_landmark_initial_location = True
 vast_config.world.randomize_landmark_initial_velocity = True
-# Configure T-SAC specifically for vast
 vast_config.tsac.hidden_dims = [512, 512, 256]
 vast_config.tsac.sequence_length = 16
 vast_config.tsac.embedding_dim = 256
 vast_config.tsac.transformer_n_layers = 4
 vast_config.tsac.transformer_n_heads = 8
 vast_config.tsac.transformer_hidden_dim = 1024
-vast_config.tsac.lr = 5e-5 # Adjust LR
-vast_config.tsac.alpha = 0.05 # Adjust alpha
+vast_config.tsac.lr = 5e-5
+vast_config.tsac.alpha = 0.05
 
 
 CONFIGS: Dict[str, DefaultConfig] = {
-    "default": default_config, # Default now points to a config potentially using SAC
-    "sac_default": sac_default_config, # Explicitly SAC
-    "tsac_default": tsac_default_config, # Explicitly T-SAC
-    "vast": vast_config, # Vast example using T-SAC
+    "default": default_config,
+    "sac_default": sac_default_config,
+    "tsac_default": tsac_default_config,
+    "vast": vast_config,
 }
 # Ensure 'default' config uses a valid algorithm setting if needed
 if default_config.algorithm not in ["sac", "ppo", "tsac"]:
-    default_config.algorithm = "sac" # Fallback for default
+    default_config.algorithm = "sac"

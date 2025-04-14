@@ -1,23 +1,38 @@
 import argparse
 import os
 import torch
+import sys
 
-# Import training functions for available algorithms
+# Prevent specific visualization imports (though they are already conditional)
+sys.modules['matplotlib'] = None
+sys.modules['matplotlib.pyplot'] = None
+sys.modules['imageio'] = None
+sys.modules['imageio.v2'] = None
+sys.modules['PIL'] = None
+
+# Import necessary modules AFTER potentially blocking visualization libs
 from SAC import train_sac, evaluate_sac
 from PPO import train_ppo, evaluate_ppo
 from TSAC import train_tsac, evaluate_tsac
-
 from configs import CONFIGS, DefaultConfig
 
-# Note: Visualization imports are now conditional within evaluate_* functions
 
-def main(config_name: str, cuda_device: str = None, algorithm: str = None, run_evaluation: bool = True):
-    """Main function to train and optionally evaluate the RL agent."""
+def bsc_main(config_name: str, cuda_device: str = None, algorithm: str = None, run_evaluation: bool = True):
+    """
+    Main function for basic execution (no visualization imports guaranteed).
+    Trains and optionally evaluates the RL agent.
+    """
     if config_name not in CONFIGS:
         raise ValueError(f"Unknown configuration name: {config_name}. Available: {list(CONFIGS.keys())}")
 
     config: DefaultConfig = CONFIGS[config_name]
-    print(f"Using configuration: '{config_name}'")
+    print(f"Using configuration: '{config_name}' (Basic Mode - No Viz Imports)")
+
+    # --- Force disable rendering in config ---
+    original_render_setting = config.evaluation.render
+    config.evaluation.render = False
+    if original_render_setting:
+        print("Rendering automatically disabled in basic mode.")
 
     if cuda_device:
         config.cuda_device = cuda_device
@@ -27,15 +42,12 @@ def main(config_name: str, cuda_device: str = None, algorithm: str = None, run_e
     if algorithm and algorithm != config.algorithm:
          print(f"Overriding config algorithm '{config.algorithm}' with command line argument: '{algorithm}'")
          config.algorithm = algorithm
-    elif not algorithm and config_name == "default":
-         print(f"Using algorithm specified in default config: '{config.algorithm}'")
     else:
          print(f"Using algorithm: '{effective_algorithm}'")
 
     use_multi_gpu = torch.cuda.is_available() and torch.cuda.device_count() > 1
     if use_multi_gpu:
          print(f"Detected {torch.cuda.device_count()} GPUs.")
-         # Note: Actual multi-GPU utilization depends on algorithm implementation
 
     model_dir = config.training.models_dir
     os.makedirs(model_dir, exist_ok=True)
@@ -48,9 +60,8 @@ def main(config_name: str, cuda_device: str = None, algorithm: str = None, run_e
     # --- Training Phase ---
     if effective_algorithm.lower() == "ppo":
         print("Training PPO agent...")
-        # Pass run_evaluation=False to prevent automatic eval after training here
         agent, episode_rewards = train_ppo(config=config, use_multi_gpu=use_multi_gpu, run_evaluation=False)
-        final_model_path = os.path.join(model_dir, f"ppo_final_ep{config.training.num_episodes}.pt") # Simplified name
+        final_model_path = os.path.join(model_dir, f"ppo_final_ep{config.training.num_episodes}.pt")
         agent.save_model(final_model_path)
         print(f"Final PPO model saved to {final_model_path}")
 
@@ -72,8 +83,9 @@ def main(config_name: str, cuda_device: str = None, algorithm: str = None, run_e
         raise ValueError(f"Unknown algorithm specified: {effective_algorithm}. Choose 'sac', 'ppo', or 'tsac'.")
 
     # --- Evaluation Phase (Optional) ---
+    # The evaluate_* functions already handle the conditional import/disabling of viz
     if run_evaluation and agent is not None:
-        print(f"\nEvaluating {effective_algorithm.upper()} agent...")
+        print(f"\nEvaluating {effective_algorithm.upper()} agent (basic mode)...")
         if effective_algorithm.lower() == "ppo":
             evaluate_ppo(agent=agent, config=config)
         elif effective_algorithm.lower() == "tsac":
@@ -83,13 +95,12 @@ def main(config_name: str, cuda_device: str = None, algorithm: str = None, run_e
     elif not run_evaluation:
          print("\nSkipping evaluation phase.")
 
-    print(f"\nTraining {'and evaluation ' if run_evaluation else ''}complete.")
-    if run_evaluation and config.evaluation.render:
-         print(f"Find potential visualizations in the {config.visualization.save_dir} directory.")
+    print(f"\nBasic Mode Training {'and evaluation ' if run_evaluation else ''}complete.")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train and evaluate RL agent for landmark tracking.")
+    parser = argparse.ArgumentParser(
+        description="Train and evaluate RL agent (Basic Mode - No Visualization Imports).")
     parser.add_argument(
         "--config", "-c", type=str, default="default",
         help=f"Configuration name to use. Available: {list(CONFIGS.keys())}"
@@ -103,7 +114,6 @@ if __name__ == "__main__":
         choices=["sac", "ppo", "tsac"],
         help="RL algorithm to use ('sac', 'ppo', 'tsac'). Overrides config."
     )
-    # Add option to skip evaluation
     eval_group = parser.add_mutually_exclusive_group()
     eval_group.add_argument(
         "--evaluate", action="store_true", default=True,
@@ -115,4 +125,4 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    main(config_name=args.config, cuda_device=args.device, algorithm=args.algorithm, run_evaluation=args.evaluate)
+    bsc_main(config_name=args.config, cuda_device=args.device, algorithm=args.algorithm, run_evaluation=args.evaluate)

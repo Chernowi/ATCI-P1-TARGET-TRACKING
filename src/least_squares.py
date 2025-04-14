@@ -43,7 +43,7 @@ class TrackedTargetLS:
                 self._observer_locations.append(observer_2d_loc)
                 self._range_measurements.append(range_measurement)
                 self._timestamps_of_measurements.append(self._current_timestamp)
-                new_measurement_added = True
+                # new_measurement_added = True # Variable not used
 
                 if len(self._observer_locations) > self.history_size:
                     self._observer_locations.pop(0)
@@ -51,6 +51,7 @@ class TrackedTargetLS:
                     self._timestamps_of_measurements.pop(0)
 
         if not perform_update_step:
+            # Simple prediction if not updating from measurements
             if self.estimated_location and self.estimated_velocity:
                 self.estimated_location.x += self.estimated_velocity.x * dt
                 self.estimated_location.y += self.estimated_velocity.y * dt
@@ -71,6 +72,7 @@ class TrackedTargetLS:
             self._update_velocity_estimate()
 
         elif self._is_initialized and self.estimated_location and self.estimated_velocity:
+            # Predict if initialized but couldn't update this step
             self.estimated_location.x += self.estimated_velocity.x * dt
             self.estimated_location.y += self.estimated_velocity.y * dt
 
@@ -97,6 +99,7 @@ class TrackedTargetLS:
             b[i-1] = (range_sq - ref_range_sq) - (xi**2 - x1**2) - (yi**2 - y1**2)
 
         try:
+            # Use pseudo-inverse for stability
             A_pinv = np.linalg.pinv(A)
             solution = A_pinv @ b
             return solution
@@ -116,8 +119,17 @@ class TrackedTargetLS:
         num_diffs = min(self.velocity_smoothing, len(self._position_history) - 1)
         if num_diffs < 1: num_diffs = 1
 
-        older_timestamp, older_pos = self._position_history[-num_diffs - 1]
-        newer_timestamp, newer_pos = self._position_history[-1]
+        # Ensure we use the correct indices for smoothing
+        # If num_diffs is 3, we use points at indices [-4] and [-1]
+        older_idx = -num_diffs - 1
+        newer_idx = -1
+
+        # Check if indices are valid (e.g., if history just reached size 2, older_idx might be -2)
+        if abs(older_idx) > len(self._position_history):
+            older_idx = -len(self._position_history) # Use the oldest available point
+
+        older_timestamp, older_pos = self._position_history[older_idx]
+        newer_timestamp, newer_pos = self._position_history[newer_idx]
 
         time_diff = newer_timestamp - older_timestamp
 
@@ -126,16 +138,21 @@ class TrackedTargetLS:
             vy = (newer_pos.y - older_pos.y) / time_diff
             self.estimated_velocity = Velocity(x=vx, y=vy, z=0.0)
         else:
+            # Avoid division by zero if timestamps are too close
+            # Keep previous velocity or set to zero if first estimate
             if not self.estimated_velocity:
                 self.estimated_velocity = Velocity(x=0.0, y=0.0, z=0.0)
-            warnings.warn("Time difference for velocity calculation is near zero.", RuntimeWarning)
+            # warnings.warn("Time difference for velocity calculation is near zero. Skipping velocity update.", RuntimeWarning)
+
 
     def _calculate_distance(self, loc1: Location, loc2: Location) -> float:
+        # Simple 2D Euclidean distance
         return ((loc1.x - loc2.x)**2 + (loc1.y - loc2.y)**2)**0.5
 
     def encode_state(self) -> Dict[str, Any]:
+        """ Encodes the internal state of the least squares estimator. """
         state = {
-            "config": self.config.model_dump(),
+            "config_dump": self.config.model_dump(), # Store config used
             "is_initialized": self._is_initialized,
             "current_timestamp": self._current_timestamp,
             "observer_locations": [(loc.x, loc.y, loc.depth) for loc in self._observer_locations],
@@ -145,14 +162,25 @@ class TrackedTargetLS:
         }
 
         if self.estimated_location is not None:
-            state["estimated_location"] = (self.estimated_location.x, self.estimated_location.y, self.estimated_location.depth)
-
+            loc = self.estimated_location
+            state["estimated_location"] = (loc.x, loc.y, loc.depth)
         if self.estimated_velocity is not None:
-            state["estimated_velocity"] = (self.estimated_velocity.x, self.estimated_velocity.y, self.estimated_velocity.z)
+            vel = self.estimated_velocity
+            state["estimated_velocity"] = (vel.x, vel.y, vel.z)
 
         return state
 
     def decode_state(self, state_dict: Dict[str, Any]) -> None:
+        """ Restores the internal state of the least squares estimator. """
+        # Config is assumed to be handled by world creation, but could verify here if needed
+        # config_dump = state_dict.get("config_dump")
+        # if config_dump:
+        #     try:
+        #         loaded_config = LeastSquaresConfig(**config_dump)
+        #         # Could compare loaded_config to self.config if strict matching is needed
+        #     except Exception as e:
+        #         warnings.warn(f"Could not load/validate config from LS state: {e}")
+
         self._is_initialized = state_dict.get("is_initialized", False)
         self._current_timestamp = state_dict.get("current_timestamp", 0.0)
 
@@ -175,4 +203,4 @@ class TrackedTargetLS:
             x, y, z = state_dict["estimated_velocity"]
             self.estimated_velocity = Velocity(x=x, y=y, z=z)
         else:
-            self.estimated_velocity = None
+            self.estimated_velocity = None # Reset if not in state
