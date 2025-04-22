@@ -11,9 +11,6 @@ class SACConfig(BaseModel):
     """Configuration for the SAC agent"""
     state_dim: int = Field(CORE_STATE_DIM, description="Dimension of the basic state tuple within the trajectory")
     action_dim: int = Field(CORE_ACTION_DIM, description="Action dimension (yaw_change)")
-    # NOTE: action_scale in WorldConfig (max_yaw_change) is the primary scaling factor now.
-    # This might be redundant or used differently in the agent implementation. Assuming agent outputs [-1, 1].
-    # action_scale: float = Field(math.pi / 4, description="Maximum magnitude of yaw change action (scales the [-1, 1] output)")
     hidden_dims: List[int] = Field([128, 128], description="List of hidden layer dimensions for MLP part")
     log_std_min: int = Field(-20, description="Minimum log std for action distribution")
     log_std_max: int = Field(2, description="Maximum log std for action distribution")
@@ -121,7 +118,7 @@ class ParticleFilterConfig(BaseModel):
 
 class LeastSquaresConfig(BaseModel):
     """Configuration for the Least Squares estimator"""
-    history_size: int = Field(10, description="Number of measurements to keep in history")
+    history_size: int = Field(8, description="Number of measurements to keep in history")
     min_points_required: int = Field(3, description="Minimum number of points required for estimation")
     position_buffer_size: int = Field(5, description="Number of position estimates to keep for velocity calculation")
     velocity_smoothing: int = Field(3, description="Number of position points to use for velocity smoothing")

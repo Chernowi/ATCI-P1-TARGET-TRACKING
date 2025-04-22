@@ -11,7 +11,7 @@ import math
 from collections import deque
 from tqdm import tqdm
 from world import World
-from configs import DefaultConfig, ReplayBufferConfig, TSACConfig, TrainingConfig, CORE_STATE_DIM, CORE_ACTION_DIM, TRAJECTORY_REWARD_DIM
+from configs import DefaultConfig, ReplayBufferConfig, TSACConfig
 from torch.utils.tensorboard import SummaryWriter
 from typing import Tuple, Optional, List
 
