@@ -9,7 +9,7 @@ import time
 from collections import deque
 from tqdm import tqdm
 from world import World
-from configs import DefaultConfig, PPOConfig
+from configs import DefaultConfig, PPOConfig, TrainingConfig, CORE_STATE_DIM # Import core state dim
 from torch.utils.tensorboard import SummaryWriter
 import math
 
@@ -62,7 +62,7 @@ class PolicyNetwork(nn.Module):
     """Actor network for PPO. Takes basic_state as input."""
     def __init__(self, config: PPOConfig):
         super(PolicyNetwork, self).__init__()
-        self.state_dim = config.state_dim
+        self.state_dim = config.state_dim # Should be CORE_STATE_DIM (8)
         self.action_dim = config.action_dim
         self.hidden_dim = config.hidden_dim
         self.log_std_min = config.log_std_min
@@ -105,7 +105,7 @@ class ValueNetwork(nn.Module):
     """Critic network for PPO. Takes basic_state as input."""
     def __init__(self, config: PPOConfig):
         super(ValueNetwork, self).__init__()
-        self.state_dim = config.state_dim
+        self.state_dim = config.state_dim # Should be CORE_STATE_DIM (8)
         self.hidden_dim = config.hidden_dim
         self.fc1 = nn.Linear(self.state_dim, self.hidden_dim)
         self.fc2 = nn.Linear(self.hidden_dim, self.hidden_dim)

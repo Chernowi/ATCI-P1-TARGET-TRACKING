@@ -1,6 +1,6 @@
 from particle_filter import TrackedTargetPF
 from world_objects import Object, Location, Velocity
-from configs import WorldConfig, LeastSquaresConfig, ParticleFilterConfig, CORE_STATE_DIM, CORE_ACTION_DIM
+from configs import WorldConfig, LeastSquaresConfig, ParticleFilterConfig, CORE_STATE_DIM, CORE_ACTION_DIM, TRAJECTORY_REWARD_DIM
 import numpy as np
 import random
 import time

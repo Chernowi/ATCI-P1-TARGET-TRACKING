@@ -10,22 +10,10 @@ import time
 from collections import deque
 from tqdm import tqdm
 from world import World
-from configs import DefaultConfig, ReplayBufferConfig, SACConfig, TrainingConfig, WorldConfig
+from configs import DefaultConfig, ReplayBufferConfig, SACConfig, TrainingConfig, CORE_STATE_DIM, CORE_ACTION_DIM, TRAJECTORY_REWARD_DIM
 from torch.utils.tensorboard import SummaryWriter
-from typing import Tuple, Optional, List, Dict, Any
+from typing import Tuple, Optional
 
-# Import the vectorized environment
-try:
-    from vec_env import SubprocVecEnv, make_env
-    VEC_ENV_AVAILABLE = True
-except ImportError:
-    print("Warning: vec_env.py not found or cloudpickle not installed. Parallel environment execution disabled.")
-    VEC_ENV_AVAILABLE = False
-    SubprocVecEnv = None # Define as None if import fails
-
-
-# --- ReplayBuffer, Actor, Critic (Keep previous versions) ---
-# (Paste the versions from the previous response that handle trajectory state)
 class ReplayBuffer:
     """Experience replay buffer storing full state trajectories."""
 
@@ -46,11 +34,11 @@ class ReplayBuffer:
         if isinstance(reward, (np.ndarray)): reward = reward.item()
 
         if trajectory.shape != (self.trajectory_length, self.feature_dim):
-             # print(f"Warning: Pushing trajectory with incorrect shape {trajectory.shape}. Expected ({self.trajectory_length}, {self.feature_dim})")
-             return # Skip if incorrect shape
+             print(f"Warning: Pushing trajectory with incorrect shape {trajectory.shape}. Expected ({self.trajectory_length}, {self.feature_dim})")
+             return
         if next_trajectory.shape != (self.trajectory_length, self.feature_dim):
-             # print(f"Warning: Pushing next_trajectory with incorrect shape {next_trajectory.shape}. Expected ({self.trajectory_length}, {self.feature_dim})")
-             return # Skip if incorrect shape
+             print(f"Warning: Pushing next_trajectory with incorrect shape {next_trajectory.shape}. Expected ({self.trajectory_length}, {self.feature_dim})")
+             return
 
         self.buffer.append((trajectory, float(action), float(reward), next_trajectory, done))
 
@@ -261,7 +249,7 @@ class Critic(nn.Module):
         """ Forward pass for Q1 only. """
         if self.use_rnn:
             basic_state_sequence = state_trajectory[:, :, :self.state_dim]
-            h1_in = hidden_state[0] if isinstance(hidden_state, tuple) and hidden_state is not None else None
+            h1_in = hidden_state[0] if isinstance(hidden_state, tuple) else hidden_state
             rnn_out1, next_h1 = self.rnn1(basic_state_sequence, h1_in)
             next_hidden_state = (next_h1, None) # Return only Q1's hidden state progression
             mlp_input1 = torch.cat([rnn_out1[:, -1, :], action], dim=1)
@@ -335,11 +323,10 @@ class SAC:
         else:
             self.log_alpha = torch.tensor(np.log(self.alpha)).to(self.device) # Keep as tensor
 
-    # Keep single select_action for evaluation/non-parallel training
     def select_action(self, state: dict, actor_hidden_state: Optional[Tuple] = None, evaluate: bool = False) -> Tuple[float, Optional[Tuple]]:
-        """Select action for a single environment state."""
-        state_trajectory = state['full_trajectory']
-        state_tensor = torch.FloatTensor(state_trajectory).to(self.device).unsqueeze(0) # (1, N, feat_dim)
+        """Select action (normalized yaw change [-1, 1]) based on state trajectory."""
+        state_trajectory = state['full_trajectory'] # Get the trajectory array
+        state_tensor = torch.FloatTensor(state_trajectory).to(self.device).unsqueeze(0) # Add batch dim (1, N, feat_dim)
 
         with torch.no_grad():
             if evaluate:
@@ -351,35 +338,15 @@ class SAC:
         action_normalized_float = action_normalized.detach().cpu().numpy()[0, 0]
         return action_normalized_float, next_actor_hidden_state
 
-    # Add select_action_batch for parallel environments
-    def select_action_batch(self, state_trajectory_batch: np.ndarray, actor_hidden_state_batch: Optional[Tuple] = None, evaluate: bool = False) -> Tuple[np.ndarray, Optional[Tuple]]:
-        """Select actions for a batch of environment states."""
-        # state_trajectory_batch shape: (batch_size, N, feature_dim)
-        state_tensor = torch.FloatTensor(state_trajectory_batch).to(self.device)
-
-        with torch.no_grad():
-            if evaluate:
-                _, _, action_mean_squashed, next_actor_hidden_state_batch = self.actor.sample(state_tensor, actor_hidden_state_batch)
-                actions_normalized = action_mean_squashed
-            else:
-                actions_normalized, _, _, next_actor_hidden_state_batch = self.actor.sample(state_tensor, actor_hidden_state_batch)
-
-        # actions_normalized shape: (batch_size, action_dim)
-        actions_normalized_np = actions_normalized.detach().cpu().numpy()
-        # If action_dim is 1, squeeze it to (batch_size,) for vec_env step compatibility
-        if self.action_dim == 1:
-             actions_normalized_np = actions_normalized_np.squeeze(axis=1)
-
-        return actions_normalized_np, next_actor_hidden_state_batch
-
     def update_parameters(self, memory: ReplayBuffer, batch_size: int):
         """Perform a single SAC update step using a batch of trajectories."""
+        # Need at least batch_size samples
         if len(memory) < batch_size:
             return None
 
         sampled_batch = memory.sample(batch_size)
         if sampled_batch is None:
-            # print("Warning: Failed to sample batch from replay buffer.")
+            print("Warning: Failed to sample batch from replay buffer.")
             return None
 
         # Shapes: state/next_state (b, N, feat_dim), action (b, 1), reward/done (b,)
@@ -387,12 +354,12 @@ class SAC:
 
         # Move batch to device
         state_batch = torch.FloatTensor(state_batch).to(self.device)
-        action_batch_normalized = torch.FloatTensor(action_batch_normalized).to(self.device) # (b, 1)
+        action_batch_normalized = torch.FloatTensor(action_batch_normalized).to(self.device)
         reward_batch = torch.FloatTensor(reward_batch).to(self.device).unsqueeze(1) # (b, 1)
         next_state_batch = torch.FloatTensor(next_state_batch).to(self.device)
         done_batch = torch.FloatTensor(done_batch).to(self.device).unsqueeze(1) # (b, 1)
 
-        # Get initial hidden states for RNNs if used (for the batch)
+        # Get initial hidden states for RNNs if used
         initial_actor_hidden = self.actor.get_initial_hidden_state(batch_size, self.device) if self.use_rnn else None
         initial_critic_hidden = self.critic.get_initial_hidden_state(batch_size, self.device) if self.use_rnn else None
         initial_critic_target_hidden = self.critic_target.get_initial_hidden_state(batch_size, self.device) if self.use_rnn else None
@@ -432,7 +399,6 @@ class SAC:
         action_pi_normalized, log_prob_pi, _, _ = self.actor.sample(state_batch, initial_actor_hidden)
 
         # Get Q-values for the current state trajectory and the *policy's* action
-        # Pass initial_critic_hidden again - assumes stateless forward pass within batch
         q1_pi, q2_pi, _ = self.critic(state_batch, action_pi_normalized, initial_critic_hidden)
         q_pi_min = torch.min(q1_pi, q2_pi)
 
@@ -466,8 +432,6 @@ class SAC:
             'actor_loss': actor_loss.item(),
             'alpha': self.alpha
         }
-
-    # save_model and load_model remain the same as previous version
 
     def save_model(self, path: str):
         print(f"Saving SAC model to {path}...")
@@ -510,12 +474,7 @@ class SAC:
                  self.alpha_optimizer = optim.Adam([self.log_alpha], lr=self.config.lr)
             self.alpha = self.log_alpha.exp().item()
         elif not self.auto_tune_alpha:
-            # If alpha is fixed, update self.alpha based on saved log_alpha if available,
-            # otherwise it keeps the initial config value.
-             if 'log_alpha' in checkpoint:
-                 self.log_alpha = checkpoint['log_alpha'].to(self.device)
-                 self.alpha = self.log_alpha.exp().item()
-
+             self.alpha = self.log_alpha.exp().item() # Update alpha based on potentially loaded fixed log_alpha
 
         # Ensure target network sync after loading
         self.critic_target.load_state_dict(self.critic.state_dict())
@@ -529,36 +488,27 @@ class SAC:
         print(f"SAC model loaded successfully from {path}")
 
 
-# --- Updated Training Function ---
-def train_sac(config: DefaultConfig, use_multi_gpu: bool = False, run_evaluation: bool = True, num_envs: int = 4):
-    """ Train SAC using parallel environments """
+def train_sac(config: DefaultConfig, use_multi_gpu: bool = False, run_evaluation: bool = True):
     sac_config = config.sac
     train_config = config.training
     buffer_config = config.replay_buffer
     world_config = config.world
     cuda_device = config.cuda_device
 
-    if num_envs > 1 and not VEC_ENV_AVAILABLE:
-        print("Warning: Requested parallel environments but SubprocVecEnv not available. Running with 1 environment.")
-        num_envs = 1
-    elif num_envs <= 0:
-        print("Warning: num_envs must be positive. Setting to 1.")
-        num_envs = 1
-
-    print(f"Using {num_envs} parallel environment(s).")
-
     learning_starts = train_config.learning_starts
     gradient_steps = train_config.gradient_steps
-    train_freq = train_config.train_freq # How often to run updates per env step
+    train_freq = train_config.train_freq
     batch_size = train_config.batch_size
-    log_frequency_ep = train_config.log_frequency # Log based on completed episodes
-    save_interval_ep = train_config.save_interval # Save based on completed episodes
+    log_frequency_ep = train_config.log_frequency
+    save_interval_ep = train_config.save_interval
 
     # Device Setup
-    # ... (same as before) ...
     if torch.cuda.is_available():
-        if use_multi_gpu: print(f"Warn: Multi-GPU not standard for SAC. Using: {cuda_device}")
-        device = torch.device(cuda_device)
+        if use_multi_gpu and torch.cuda.device_count() > 1:
+            print(f"Warning: Multi-GPU not standard for SAC. Using single specified/default GPU: {cuda_device}")
+            device = torch.device(cuda_device)
+        else:
+            device = torch.device(cuda_device)
         print(f"Using device: {device}")
         if 'cuda' in cuda_device:
             try: torch.cuda.set_device(device); print(f"GPU: {torch.cuda.get_device_name(device)}")
@@ -566,19 +516,18 @@ def train_sac(config: DefaultConfig, use_multi_gpu: bool = False, run_evaluation
     else:
         device = torch.device("cpu"); print("GPU not available, using CPU.")
 
-
     # --- Initialization ---
-    log_dir = os.path.join("runs", f"sac_parallel_{num_envs}env_{int(time.time())}")
+    log_dir = os.path.join("runs", f"sac_traj_{int(time.time())}") # Added _traj suffix
     os.makedirs(log_dir, exist_ok=True)
     writer = SummaryWriter(log_dir=log_dir)
     print(f"TensorBoard logs: {log_dir}")
 
     agent = SAC(config=sac_config, world_config=world_config, device=device)
+    # Pass world_config to buffer for trajectory info
     memory = ReplayBuffer(config=buffer_config, world_config=world_config)
     os.makedirs(train_config.models_dir, exist_ok=True)
 
     # --- Load Checkpoint ---
-    # ... (same as before) ...
     model_files = [f for f in os.listdir(train_config.models_dir) if f.startswith("sac_") and f.endswith(".pt")]
     latest_model_path = None
     if model_files:
@@ -586,204 +535,154 @@ def train_sac(config: DefaultConfig, use_multi_gpu: bool = False, run_evaluation
         except Exception as e: print(f"Could not find latest model: {e}")
 
     total_steps = 0
-    completed_episodes_total = 0 # Track total completed episodes across all envs
-    start_episode = 1 # This now represents completed episodes count start
+    start_episode = 1
     if latest_model_path and os.path.exists(latest_model_path):
         print(f"\nResuming training from: {latest_model_path}")
         agent.load_model(latest_model_path)
-        # Try parsing total steps and completed episodes from filename (adjust if format changes)
         try:
+            # Try parsing step/episode count (adjust parsing if format changes)
             step_str = latest_model_path.split('_step')[-1].split('.pt')[0]
-            # Assuming filename might store completed episodes now, e.g., _comp_ep
-            ep_str = latest_model_path.split('_comp_ep')[-1].split('_')[0]
+            ep_str = latest_model_path.split('_ep')[-1].split('_')[0]
             total_steps = int(step_str)
-            completed_episodes_total = int(ep_str)
-            start_episode = completed_episodes_total + 1
-            print(f"Resuming at total_steps {total_steps}, completed_episodes {completed_episodes_total}")
+            start_episode = int(ep_str) + 1
+            print(f"Resuming at step {total_steps}, episode {start_episode}")
         except (IndexError, ValueError):
-             print("Warning: Could not parse steps/episode from filename. Starting counts from 0.")
+             print("Warning: Could not parse steps/episode from filename. Starting counts from 0/1.")
     else:
         print("\nStarting training from scratch.")
 
-
-    # --- Environment Setup ---
-    if num_envs > 1:
-        env_fns = [make_env(world_config, seed=i) for i in range(num_envs)]
-        vec_env = SubprocVecEnv(env_fns)
-    else:
-        vec_env = World(world_config=world_config) # Fallback to single env if num_envs=1
-
     # --- Training Loop ---
-    # Get initial states
-    if isinstance(vec_env, SubprocVecEnv):
-        current_states_list = vec_env.reset() # List of state dicts
-    else: # Single env case
-        current_states_list = [vec_env.reset()] # Wrap in list
+    episode_rewards = []
+    all_losses = {'critic_loss': [], 'actor_loss': [], 'alpha': []}
+    timing_metrics = { 'env_step_time': deque(maxlen=100), 'parameter_update_time': deque(maxlen=100) }
 
-    # Initialize hidden states for the batch
-    actor_hidden_states = agent.actor.get_initial_hidden_state(num_envs, device) if agent.use_rnn else None
+    pbar = tqdm(range(start_episode, train_config.num_episodes + 1),
+                desc="Training SAC", unit="episode", initial=start_episode-1, total=train_config.num_episodes)
 
-    # Tracking across environments
-    current_episode_rewards = np.zeros(num_envs)
-    current_episode_steps = np.zeros(num_envs, dtype=int)
-    all_completed_episode_rewards = deque(maxlen=100) # Store rewards of completed episodes for avg log
+    # Current world state - reset for each episode
+    world = World(world_config=world_config) # Initialize world once outside the loop? No, needs reset.
 
-    # Progress bar based on total completed episodes
-    pbar = tqdm(total=train_config.num_episodes, desc="Training SAC (Parallel)", initial=completed_episodes_total)
+    for episode in pbar:
+        world.reset() # Ensure world is reset properly
+        state = world.encode_state() # state is dict with 'full_trajectory'
+        episode_reward = 0
+        episode_steps = 0
 
-    training_start_time = time.time()
+        actor_hidden_state = agent.actor.get_initial_hidden_state(batch_size=1, device=device) if agent.use_rnn else None
 
-    while completed_episodes_total < train_config.num_episodes:
+        episode_losses_temp = {'critic_loss': [], 'actor_loss': [], 'alpha': []}
+        updates_made_this_episode = 0
 
-        # Check if learning should start
-        if total_steps < learning_starts:
-            # Take random actions if not learning yet (or use initial policy evaluation)
-            # For simplicity, let's use the policy but don't update
-            actions_normalized_batch, next_actor_hidden_states = agent.select_action_batch(
-                 np.stack([s['full_trajectory'] for s in current_states_list]), # Stack trajectories
-                 actor_hidden_state_batch=actor_hidden_states,
-                 evaluate=True # Use mean action before learning starts? Or sample? Sample is fine.
-            )
-        else:
-            # Select actions for the batch using the agent
-            actions_normalized_batch, next_actor_hidden_states = agent.select_action_batch(
-                 np.stack([s['full_trajectory'] for s in current_states_list]),
-                 actor_hidden_state_batch=actor_hidden_states,
-                 evaluate=False
+        for step_in_episode in range(train_config.max_steps):
+            # Select action based on current state trajectory
+            action_normalized, next_actor_hidden_state = agent.select_action(
+                state, actor_hidden_state=actor_hidden_state, evaluate=False
             )
 
-        # Step environments
-        step_start_time = time.time()
-        if isinstance(vec_env, SubprocVecEnv):
-             # actions_normalized_batch shape should be (num_envs,) if action_dim=1
-             next_states_list, rewards_batch, dones_batch, infos_list = vec_env.step(actions_normalized_batch)
-        else: # Single env case
-             vec_env.step(actions_normalized_batch[0], training=True, terminal_step=(current_episode_steps[0] >= train_config.max_steps -1))
-             next_states_list = [vec_env.encode_state()]
-             rewards_batch = np.array([vec_env.reward])
-             dones_batch = np.array([vec_env.done])
-             infos_list = [{'error_dist': vec_env.error_dist}] # Wrap info
-        step_time = time.time() - step_start_time
-        # Note: Can't easily average step time across parallel envs here
+            step_start_time = time.time()
+            # Step the world - world updates its internal history now
+            world.step(action_normalized, training=True, terminal_step=(step_in_episode == train_config.max_steps - 1))
+            step_time = time.time() - step_start_time
+            timing_metrics['env_step_time'].append(step_time)
 
-        # Process results and store experience
-        for i in range(num_envs):
-            # Ensure state/next_state are dicts for pushing
-            current_state_dict = current_states_list[i]
-            next_state_dict = next_states_list[i]
+            reward = world.reward # Reward received *after* the step
+            next_state = world.encode_state() # next_state dict includes 'full_trajectory'
+            done = world.done
 
-            # Push individual transitions (or rather, the state/next_state trajectories)
-            memory.push(current_state_dict, actions_normalized_batch[i], rewards_batch[i], next_state_dict, dones_batch[i])
+            # Push trajectory, action, reward, next_trajectory, done
+            memory.push(state, action_normalized, reward, next_state, done)
 
-            current_episode_rewards[i] += rewards_batch[i]
-            current_episode_steps[i] += 1
-            total_steps += 1 # Increment total steps based on interactions
+            state = next_state # Update state for next iteration
+            if agent.use_rnn: actor_hidden_state = next_actor_hidden_state
 
-            if dones_batch[i]:
-                completed_episodes_total += 1
-                pbar.update(1) # Update progress bar for each completed episode
+            episode_reward += reward
+            episode_steps += 1
+            total_steps += 1
 
-                # Log completed episode reward immediately
-                writer.add_scalar('Reward/CompletedEpisodeRaw', current_episode_rewards[i], completed_episodes_total)
-                writer.add_scalar('Steps/CompletedEpisode', current_episode_steps[i], completed_episodes_total)
-                writer.add_scalar('Error/Distance_EpisodeEnd', infos_list[i].get('error_dist', float('inf')), completed_episodes_total)
+            # Perform Updates
+            if total_steps >= learning_starts and total_steps % train_freq == 0:
+                for _ in range(gradient_steps):
+                    if len(memory) >= batch_size: # Check if enough samples for a batch
+                        update_start_time = time.time()
+                        losses = agent.update_parameters(memory, batch_size)
+                        update_time = time.time() - update_start_time
+                        if losses: # update might return None
+                            timing_metrics['parameter_update_time'].append(update_time)
+                            episode_losses_temp['critic_loss'].append(losses['critic_loss'])
+                            episode_losses_temp['actor_loss'].append(losses['actor_loss'])
+                            episode_losses_temp['alpha'].append(losses['alpha'])
+                            updates_made_this_episode += 1
+                        else:
+                             break # Stop gradient steps if sampling failed
+                    else:
+                         break # Stop gradient steps if buffer too small
 
-                all_completed_episode_rewards.append(current_episode_rewards[i]) # Store for averaging
+            if done:
+                break
 
-                # Reset tracking for this env
-                current_episode_rewards[i] = 0.0
-                current_episode_steps[i] = 0
+        # --- Logging and Reporting (End of Episode) ---
+        episode_rewards.append(episode_reward)
+        avg_losses = {k: np.mean(v) if v else 0 for k, v in episode_losses_temp.items()}
+        if updates_made_this_episode > 0 :
+             all_losses['critic_loss'].append(avg_losses['critic_loss'])
+             all_losses['actor_loss'].append(avg_losses['actor_loss'])
+             all_losses['alpha'].append(avg_losses['alpha'])
 
-                # Reset RNN hidden state for this env index
-                if agent.use_rnn and actor_hidden_states is not None:
-                    if isinstance(actor_hidden_states, tuple): # LSTM state is (h, c)
-                        actor_hidden_states[0][:, i, :] = 0.0 # Reset h state for env i
-                        actor_hidden_states[1][:, i, :] = 0.0 # Reset c state for env i
-                    else: # GRU state is just h
-                        actor_hidden_states[:, i, :] = 0.0 # Reset h state for env i
+        if episode % log_frequency_ep == 0:
+            if timing_metrics['env_step_time']:
+                 avg_step_time = np.mean(timing_metrics['env_step_time'])
+                 writer.add_scalar('Time/Environment_Step_ms_Avg100', avg_step_time * 1000, total_steps)
+            if timing_metrics['parameter_update_time']:
+                 avg_param_update_time = np.mean(timing_metrics['parameter_update_time'])
+                 writer.add_scalar('Time/Parameter_Update_ms_Avg100', avg_param_update_time * 1000, total_steps)
+            elif total_steps >= learning_starts:
+                 writer.add_scalar('Time/Parameter_Update_ms_Avg100', 0, total_steps) # Log 0 if learning started but no updates yet
 
-                # Check saving interval based on completed episodes
-                if completed_episodes_total % save_interval_ep == 0:
-                    save_path = os.path.join(
-                        train_config.models_dir, f"sac_comp_ep{completed_episodes_total}_step{total_steps}.pt")
-                    agent.save_model(save_path)
+            writer.add_scalar('Reward/Episode', episode_reward, total_steps)
+            writer.add_scalar('Steps/Episode', episode_steps, total_steps)
+            writer.add_scalar('Progress/Total_Steps', total_steps, episode)
+            writer.add_scalar('Progress/Buffer_Size', len(memory), total_steps)
+            writer.add_scalar('Error/Distance_EndEpisode', world.error_dist, total_steps)
 
-        # Update current states and hidden states for the next iteration
-        current_states_list = next_states_list
-        if agent.use_rnn:
-            actor_hidden_states = next_actor_hidden_states
+            if updates_made_this_episode > 0:
+                writer.add_scalar('Loss/Critic_AvgEp', avg_losses['critic_loss'], total_steps)
+                writer.add_scalar('Loss/Actor_AvgEp', avg_losses['actor_loss'], total_steps)
+                writer.add_scalar('Alpha/Value_AvgEp', avg_losses['alpha'], total_steps)
+            else: # Log current agent alpha if no updates happened
+                 writer.add_scalar('Loss/Critic_AvgEp', 0, total_steps)
+                 writer.add_scalar('Loss/Actor_AvgEp', 0, total_steps)
+                 writer.add_scalar('Alpha/Value_AvgEp', agent.alpha, total_steps)
 
-        # Agent updates (triggered less frequently relative to total steps)
-        if total_steps >= learning_starts and total_steps % (train_freq * num_envs) == 0: # Adjust freq based on num_envs? Or keep based on total steps? Keep based on total_steps for now.
-             # if total_steps >= learning_starts: # Check every step if learning started
-             if total_steps >= learning_starts and total_steps % train_freq == 0:
-                 # Perform gradient steps
-                 updates_made = 0
-                 update_times = []
-                 for _ in range(gradient_steps * num_envs): # Scale gradient steps? Or keep 1 per trigger? Let's keep simple first.
-                 # for _ in range(gradient_steps):
-                      if len(memory) >= batch_size:
-                           update_start_time = time.time()
-                           losses = agent.update_parameters(memory, batch_size)
-                           update_times.append(time.time() - update_start_time)
-                           if losses:
-                                # Log losses immediately? Or average over the gradient steps? Average is better.
-                                writer.add_scalar('Loss/Critic_Step', losses['critic_loss'], total_steps)
-                                writer.add_scalar('Loss/Actor_Step', losses['actor_loss'], total_steps)
-                                writer.add_scalar('Alpha/Value_Step', losses['alpha'], total_steps)
-                                updates_made += 1
-                      else:
-                           break # Stop if buffer becomes too small
+            lookback = min(100, len(episode_rewards))
+            avg_reward_100 = np.mean(episode_rewards[-lookback:]) if episode_rewards else 0
+            writer.add_scalar('Reward/Average_100', avg_reward_100, total_steps)
 
-                 if updates_made > 0 and update_times:
-                      avg_update_time = np.mean(update_times)
-                      writer.add_scalar('Time/Parameter_Update_ms', avg_update_time * 1000, total_steps)
+        if episode % 10 == 0: # Update progress bar less frequently
+            lookback = min(10, len(episode_rewards))
+            avg_reward_10 = np.mean(episode_rewards[-lookback:]) if episode_rewards else 0
+            pbar_postfix = {'avg_rew_10': f'{avg_reward_10:.2f}', 'steps': total_steps, 'alpha': f"{agent.alpha:.3f}"}
+            if updates_made_this_episode > 0:
+                 pbar_postfix['crit_loss'] = f"{avg_losses['critic_loss']:.2f}"
+            pbar.set_postfix(pbar_postfix)
 
+        if episode % save_interval_ep == 0:
+            save_path = os.path.join(train_config.models_dir, f"sac_ep{episode}_step{total_steps}.pt")
+            agent.save_model(save_path)
 
-        # Periodic Logging (based on total_steps or completed_episodes)
-        # Using completed_episodes for logging interval seems more consistent across runs
-        if completed_episodes_total > 0 and completed_episodes_total % (log_frequency_ep * num_envs) == 0 : # Log less frequently
-             if all_completed_episode_rewards:
-                 avg_reward_100 = np.mean(all_completed_episode_rewards)
-                 writer.add_scalar('Reward/Average_100_Completed', avg_reward_100, completed_episodes_total)
-
-             # Log other stats like buffer size, total steps
-             writer.add_scalar('Progress/Total_Steps', total_steps, completed_episodes_total)
-             writer.add_scalar('Progress/Buffer_Size', len(memory), completed_episodes_total)
-             writer.add_scalar('Progress/Completed_Episodes', completed_episodes_total, total_steps)
-             current_time = time.time()
-             elapsed_time = current_time - training_start_time
-             steps_per_sec = total_steps / elapsed_time if elapsed_time > 0 else 0
-             writer.add_scalar('Performance/Steps_Per_Second', steps_per_sec, total_steps)
-
-             # Update pbar postfix less frequently
-             if all_completed_episode_rewards:
-                 pbar.set_postfix({'avg_rew_100': f'{avg_reward_100:.2f}', 'steps': total_steps, 'SPS': f'{steps_per_sec:.0f}'})
-
-
-    # --- End of Training ---
     pbar.close()
     writer.close()
-    if isinstance(vec_env, SubprocVecEnv): vec_env.close() # Close parallel environments
-
-    print(f"Training finished. Total steps: {total_steps}, Completed episodes: {completed_episodes_total}")
-    final_save_path = os.path.join(
-        train_config.models_dir, f"sac_final_comp_ep{completed_episodes_total}_step{total_steps}.pt")
+    print(f"Training finished. Total steps: {total_steps}")
+    final_save_path = os.path.join(train_config.models_dir, f"sac_final_ep{train_config.num_episodes}_step{total_steps}.pt")
     agent.save_model(final_save_path)
 
     if run_evaluation:
          print("\nStarting evaluation after training...")
-         # Evaluation usually runs on a single environment
-         evaluate_sac(agent=agent, config=config)
+         evaluate_sac(agent=agent, config=config) # Pass full config
 
-    # Return agent and rewards (maybe return the deque of completed rewards)
-    return agent, list(all_completed_episode_rewards)
+    return agent, episode_rewards
 
 
-# --- Evaluation Function (evaluate_sac) ---
-# Keep the previous version of evaluate_sac, as evaluation is typically done
-# sequentially on a single environment instance.
-def evaluate_sac(agent: SAC, config: DefaultConfig):
+def evaluate_sac(agent: SAC, config: DefaultConfig): # Takes full config now
     eval_config = config.evaluation
     world_config = config.world
     vis_config = config.visualization
@@ -806,8 +705,7 @@ def evaluate_sac(agent: SAC, config: DefaultConfig):
     agent.critic.eval() # Also set critic to eval mode
 
     print(f"\nRunning SAC Evaluation for {eval_config.num_episodes} episodes...")
-    # Create a single world instance for evaluation
-    world = World(world_config=world_config)
+    world = World(world_config=world_config) # Create world instance for evaluation
 
     for episode in range(eval_config.num_episodes):
         world.reset() # Reset world at the start of each episode
@@ -815,7 +713,6 @@ def evaluate_sac(agent: SAC, config: DefaultConfig):
         episode_reward = 0
         episode_frames = []
 
-        # Initialize hidden state for single env eval
         actor_hidden_state = agent.actor.get_initial_hidden_state(batch_size=1, device=agent.device) if agent.use_rnn else None
 
         if eval_config.render and vis_available:
@@ -829,12 +726,10 @@ def evaluate_sac(agent: SAC, config: DefaultConfig):
             except Exception as e: print(f"Warn: Vis failed init state. E: {e}")
 
         for step in range(eval_config.max_steps):
-            # Use single select_action for evaluation
             action_normalized, next_actor_hidden_state = agent.select_action(
                 state, actor_hidden_state=actor_hidden_state, evaluate=True
             )
 
-            # Step the single environment
             world.step(action_normalized, training=False, terminal_step=(step == eval_config.max_steps - 1))
             reward = world.reward # Get reward from world (usually 0 in eval)
             next_state = world.encode_state()
@@ -857,7 +752,7 @@ def evaluate_sac(agent: SAC, config: DefaultConfig):
                     success_count += 1
                     print(f"  Episode {episode+1}: Success! Step {step+1} (Err: {world.error_dist:.2f} <= Thresh {world_config.success_threshold})")
                 else:
-                    print(f"  Episode {episode+1}: Terminated Step {step+1}. Final Err: {world.error_dist:.2f}, Collision: {world._calculate_range_measurement(world.agent.location, world.true_landmark.location) < world_config.collision_threshold}")
+                    print(f"  Episode {episode+1}: Terminated early Step {step+1}. Final Err: {world.error_dist:.2f}")
                 break
 
         if not done: # Reached max steps
@@ -883,6 +778,8 @@ def evaluate_sac(agent: SAC, config: DefaultConfig):
                      if os.path.exists(frame):
                          try: os.remove(frame); cleaned_count += 1
                          except OSError as ose: print(f"    Warn: Could not delete SAC frame file {frame}: {ose}")
+                 # print(f"    Cleaned up {cleaned_count}/{len(episode_frames)} frame files.")
+
 
     agent.actor.train() # Set actor back to train mode
     agent.critic.train() # Set critic back to train mode
@@ -902,4 +799,3 @@ def evaluate_sac(agent: SAC, config: DefaultConfig):
     print("--- End SAC Evaluation ---\n")
 
     return eval_rewards, success_rate
-
