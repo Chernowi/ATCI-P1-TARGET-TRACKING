@@ -9,7 +9,7 @@ import random
 import time
 from collections import deque
 from tqdm import tqdm
-from world import World
+from world import World, WorldConfig # Import WorldConfig
 from configs import DefaultConfig, ReplayBufferConfig, SACConfig, TrainingConfig, CORE_STATE_DIM, CORE_ACTION_DIM, TRAJECTORY_REWARD_DIM
 from torch.utils.tensorboard import SummaryWriter
 from typing import Tuple, Optional
@@ -72,9 +72,11 @@ class Actor(nn.Module):
         self.config = config
         self.world_config = world_config
         self.use_rnn = config.use_rnn
+        self.mlp_uses_full_trajectory = config.mlp_uses_full_trajectory
         self.state_dim = config.state_dim # Dimension of basic state
         self.action_dim = config.action_dim
         self.trajectory_length = world_config.trajectory_length
+        self.feature_dim = world_config.trajectory_feature_dim # Feature dim per step
 
         if self.use_rnn:
             self.rnn_hidden_size = config.rnn_hidden_size
@@ -90,8 +92,11 @@ class Actor(nn.Module):
                 raise ValueError(f"Unsupported RNN type: {config.rnn_type}")
             mlp_input_dim = config.rnn_hidden_size
         else:
-            # MLP uses only the last basic state
-            mlp_input_dim = self.state_dim
+            # MLP uses either last basic state or flattened full trajectory
+            if self.mlp_uses_full_trajectory:
+                 mlp_input_dim = self.trajectory_length * self.feature_dim
+            else:
+                 mlp_input_dim = self.state_dim
             self.rnn = None
 
         self.layers = nn.ModuleList()
@@ -110,19 +115,20 @@ class Actor(nn.Module):
     def forward(self, state_trajectory: torch.Tensor, hidden_state: Optional[Tuple] = None) -> Tuple[torch.Tensor, torch.Tensor, Optional[Tuple]]:
         """Forward pass through the network."""
         # state_trajectory shape: (batch, seq_len, feature_dim)
-        # feature_dim includes basic_state, prev_action, prev_reward
+        next_hidden_state = None
 
         if self.use_rnn:
             # Extract basic state sequence for RNN
             basic_state_sequence = state_trajectory[:, :, :self.state_dim] # Shape: (batch, seq_len, state_dim)
-            # RNN processing
             rnn_output, next_hidden_state = self.rnn(basic_state_sequence, hidden_state)
-            # Use the output corresponding to the last time step
             mlp_input = rnn_output[:, -1, :] # Shape: (batch, rnn_hidden_size)
         else:
-            # Use only the last basic state from the trajectory
-            mlp_input = state_trajectory[:, -1, :self.state_dim] # Shape: (batch, state_dim)
-            next_hidden_state = None
+            if self.mlp_uses_full_trajectory:
+                # Use flattened full trajectory
+                mlp_input = state_trajectory.view(state_trajectory.size(0), -1) # Shape: (batch, seq_len * feature_dim)
+            else:
+                # Use only the last basic state from the trajectory
+                mlp_input = state_trajectory[:, -1, :self.state_dim] # Shape: (batch, state_dim)
 
         x = mlp_input
         for layer in self.layers:
@@ -168,9 +174,11 @@ class Critic(nn.Module):
         self.config = config
         self.world_config = world_config
         self.use_rnn = config.use_rnn
+        self.mlp_uses_full_trajectory = config.mlp_uses_full_trajectory
         self.state_dim = config.state_dim
         self.action_dim = config.action_dim
         self.trajectory_length = world_config.trajectory_length
+        self.feature_dim = world_config.trajectory_feature_dim
 
         if self.use_rnn:
             self.rnn_hidden_size = config.rnn_hidden_size
@@ -184,8 +192,11 @@ class Critic(nn.Module):
                                   num_layers=config.rnn_num_layers, batch_first=True)
             mlp_input_dim = config.rnn_hidden_size + self.action_dim # MLP takes final RNN state + action
         else:
-            # MLP uses only the last basic state + action
-            mlp_input_dim = self.state_dim + self.action_dim
+            # MLP uses either last basic state or flattened trajectory
+            if self.mlp_uses_full_trajectory:
+                 mlp_input_dim = self.trajectory_length * self.feature_dim + self.action_dim
+            else:
+                 mlp_input_dim = self.state_dim + self.action_dim
             self.rnn1, self.rnn2 = None, None
 
         # Q1 architecture
@@ -208,8 +219,7 @@ class Critic(nn.Module):
 
     def forward(self, state_trajectory: torch.Tensor, action: torch.Tensor, hidden_state: Optional[Tuple] = None) -> Tuple[torch.Tensor, torch.Tensor, Optional[Tuple]]:
         """Forward pass returning both Q-values."""
-        # state_trajectory shape: (batch, seq_len, feature_dim)
-        # action shape: (batch, action_dim) - Action corresponding to the *last* state in the trajectory
+        next_hidden_state = None
 
         if self.use_rnn:
             basic_state_sequence = state_trajectory[:, :, :self.state_dim] # (batch, seq_len, state_dim)
@@ -221,15 +231,19 @@ class Critic(nn.Module):
             rnn_out2, next_h2 = self.rnn2(basic_state_sequence, h2_in)
             next_hidden_state = (next_h1, next_h2)
 
-            # Use final RNN hidden state and concatenate with action
             mlp_input1 = torch.cat([rnn_out1[:, -1, :], action], dim=1)
             mlp_input2 = torch.cat([rnn_out2[:, -1, :], action], dim=1)
         else:
-            # Use last basic state and concatenate with action
-            last_basic_state = state_trajectory[:, -1, :self.state_dim] # (batch, state_dim)
-            mlp_input1 = torch.cat([last_basic_state, action], dim=1)
-            mlp_input2 = torch.cat([last_basic_state, action], dim=1)
-            next_hidden_state = None
+            if self.mlp_uses_full_trajectory:
+                 # Flatten trajectory and concatenate with action
+                 flat_state = state_trajectory.view(state_trajectory.size(0), -1) # (batch, seq_len * feature_dim)
+                 mlp_input1 = torch.cat([flat_state, action], dim=1)
+                 mlp_input2 = torch.cat([flat_state, action], dim=1)
+            else:
+                # Use last basic state and concatenate with action
+                last_basic_state = state_trajectory[:, -1, :self.state_dim] # (batch, state_dim)
+                mlp_input1 = torch.cat([last_basic_state, action], dim=1)
+                mlp_input2 = torch.cat([last_basic_state, action], dim=1)
 
         # Q1 calculation
         x1 = mlp_input1
@@ -247,6 +261,7 @@ class Critic(nn.Module):
 
     def q1_forward(self, state_trajectory: torch.Tensor, action: torch.Tensor, hidden_state: Optional[Tuple] = None) -> Tuple[torch.Tensor, Optional[Tuple]]:
         """ Forward pass for Q1 only. """
+        next_hidden_state = None
         if self.use_rnn:
             basic_state_sequence = state_trajectory[:, :, :self.state_dim]
             h1_in = hidden_state[0] if isinstance(hidden_state, tuple) else hidden_state
@@ -254,9 +269,12 @@ class Critic(nn.Module):
             next_hidden_state = (next_h1, None) # Return only Q1's hidden state progression
             mlp_input1 = torch.cat([rnn_out1[:, -1, :], action], dim=1)
         else:
-            last_basic_state = state_trajectory[:, -1, :self.state_dim]
-            mlp_input1 = torch.cat([last_basic_state, action], dim=1)
-            next_hidden_state = None
+            if self.mlp_uses_full_trajectory:
+                flat_state = state_trajectory.view(state_trajectory.size(0), -1)
+                mlp_input1 = torch.cat([flat_state, action], dim=1)
+            else:
+                last_basic_state = state_trajectory[:, -1, :self.state_dim]
+                mlp_input1 = torch.cat([last_basic_state, action], dim=1)
 
         x1 = mlp_input1
         for layer in self.q1_layers:
@@ -291,6 +309,7 @@ class SAC:
         self.alpha = config.alpha
         self.auto_tune_alpha = config.auto_tune_alpha
         self.use_rnn = config.use_rnn
+        self.mlp_uses_full_trajectory = config.mlp_uses_full_trajectory
         self.trajectory_length = world_config.trajectory_length
         self.state_dim = config.state_dim # Basic state dim
         self.action_dim = config.action_dim
@@ -302,6 +321,8 @@ class SAC:
         print(f"SAC Agent using device: {self.device}")
         if self.use_rnn:
              print(f"SAC Agent using RNN: Type={config.rnn_type}, Hidden={config.rnn_hidden_size}, Layers={config.rnn_num_layers}, SeqLen={self.trajectory_length}")
+        elif self.mlp_uses_full_trajectory:
+             print(f"SAC Agent using MLP (Processing flattened {self.trajectory_length}-step trajectory)")
         else:
              print(f"SAC Agent using MLP (Processing last state of {self.trajectory_length}-step trajectory)")
 

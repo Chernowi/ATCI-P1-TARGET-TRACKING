@@ -8,27 +8,29 @@ from torch.distributions import Normal
 import time
 from collections import deque
 from tqdm import tqdm
-from world import World
+from world import World, WorldConfig # Import WorldConfig
 from configs import DefaultConfig, PPOConfig, TrainingConfig, CORE_STATE_DIM # Import core state dim
 from torch.utils.tensorboard import SummaryWriter
 import math
 
 class PPOMemory:
-    """Memory buffer for PPO algorithm. Stores individual basic states."""
+    """Memory buffer for PPO algorithm. Stores either basic states or full trajectories."""
 
-    def __init__(self, batch_size=64):
-        # Stores individual transitions, not trajectories
-        self.states = [] # List of basic_state tuples
+    def __init__(self, batch_size=64, store_full_trajectory=False, trajectory_length=10, feature_dim=10):
+        self.states = [] # List of basic_state tuples or full_trajectory numpy arrays
         self.actions = [] # List of float actions
         self.probs = []   # List of float log probs
         self.vals = []    # List of float values
         self.rewards = [] # List of float rewards
         self.dones = []   # List of bool dones
         self.batch_size = batch_size
+        self.store_full_trajectory = store_full_trajectory
+        self.trajectory_length = trajectory_length
+        self.feature_dim = feature_dim
 
-    def store(self, basic_state, action, probs, vals, reward, done):
+    def store(self, state_representation, action, probs, vals, reward, done):
         """Store a transition in memory."""
-        self.states.append(basic_state)
+        self.states.append(state_representation) # Either basic_state tuple or full_trajectory array
         self.actions.append(action)
         self.probs.append(probs)
         self.vals.append(vals)
@@ -45,7 +47,13 @@ class PPOMemory:
         np.random.shuffle(indices)
         batches = [indices[i:i+self.batch_size] for i in batch_start]
 
-        states_arr = np.array(self.states, dtype=np.float32) # (N, state_dim)
+        if self.store_full_trajectory:
+            # States are full trajectories (N, T, F)
+            states_arr = np.array(self.states, dtype=np.float32)
+        else:
+            # States are basic states (N, S)
+            states_arr = np.array(self.states, dtype=np.float32)
+
         actions_arr = np.array(self.actions, dtype=np.float32).reshape(-1, 1) # (N, 1)
         probs_arr = np.array(self.probs, dtype=np.float32).reshape(-1, 1) # (N, 1) - Ensure shape
         vals_arr = np.array(self.vals, dtype=np.float32).reshape(-1, 1) # (N, 1) - Ensure shape
@@ -59,30 +67,34 @@ class PPOMemory:
 
 
 class PolicyNetwork(nn.Module):
-    """Actor network for PPO. Takes basic_state as input."""
-    def __init__(self, config: PPOConfig):
+    """Actor network for PPO. Takes basic_state or flattened trajectory as input."""
+    def __init__(self, config: PPOConfig, world_config: WorldConfig): # Add world_config
         super(PolicyNetwork, self).__init__()
-        self.state_dim = config.state_dim # Should be CORE_STATE_DIM (8)
+        self.mlp_uses_full_trajectory = config.mlp_uses_full_trajectory
+        if self.mlp_uses_full_trajectory:
+            self.input_dim = world_config.trajectory_length * world_config.trajectory_feature_dim
+        else:
+            self.input_dim = config.state_dim # Basic state dim
         self.action_dim = config.action_dim
         self.hidden_dim = config.hidden_dim
         self.log_std_min = config.log_std_min
         self.log_std_max = config.log_std_max
 
-        self.fc1 = nn.Linear(self.state_dim, self.hidden_dim)
+        self.fc1 = nn.Linear(self.input_dim, self.hidden_dim)
         self.fc2 = nn.Linear(self.hidden_dim, self.hidden_dim)
         self.mean = nn.Linear(self.hidden_dim, self.action_dim)
         self.log_std = nn.Parameter(torch.zeros(1, self.action_dim))
 
-    def forward(self, basic_state): # Takes basic_state now
-        x = F.relu(self.fc1(basic_state))
+    def forward(self, state): # Input shape depends on config
+        x = F.relu(self.fc1(state))
         x = F.relu(self.fc2(x))
         action_mean = self.mean(x)
         action_log_std = torch.clamp(self.log_std, self.log_std_min, self.log_std_max)
         action_std = torch.exp(action_log_std)
         return action_mean, action_std
 
-    def sample(self, basic_state):
-        mean, std = self.forward(basic_state)
+    def sample(self, state): # Input shape depends on config
+        mean, std = self.forward(state)
         distribution = Normal(mean, std)
         x_t = distribution.sample()
         action_normalized = torch.tanh(x_t)
@@ -90,8 +102,8 @@ class PolicyNetwork(nn.Module):
         log_prob = log_prob.sum(1, keepdim=True)
         return action_normalized, log_prob
 
-    def evaluate(self, basic_state, action_normalized):
-        mean, std = self.forward(basic_state)
+    def evaluate(self, state, action_normalized): # Input shape depends on config
+        mean, std = self.forward(state)
         distribution = Normal(mean, std)
         action_tanh = torch.clamp(action_normalized, -0.99999, 0.99999) # Clamp before atanh
         action_original_space = torch.atanh(action_tanh)
@@ -102,63 +114,83 @@ class PolicyNetwork(nn.Module):
 
 
 class ValueNetwork(nn.Module):
-    """Critic network for PPO. Takes basic_state as input."""
-    def __init__(self, config: PPOConfig):
+    """Critic network for PPO. Takes basic_state or flattened trajectory as input."""
+    def __init__(self, config: PPOConfig, world_config: WorldConfig): # Add world_config
         super(ValueNetwork, self).__init__()
-        self.state_dim = config.state_dim # Should be CORE_STATE_DIM (8)
+        self.mlp_uses_full_trajectory = config.mlp_uses_full_trajectory
+        if self.mlp_uses_full_trajectory:
+            self.input_dim = world_config.trajectory_length * world_config.trajectory_feature_dim
+        else:
+            self.input_dim = config.state_dim # Basic state dim
         self.hidden_dim = config.hidden_dim
-        self.fc1 = nn.Linear(self.state_dim, self.hidden_dim)
+        self.fc1 = nn.Linear(self.input_dim, self.hidden_dim)
         self.fc2 = nn.Linear(self.hidden_dim, self.hidden_dim)
         self.value = nn.Linear(self.hidden_dim, 1)
 
-    def forward(self, basic_state): # Takes basic_state now
-        x = F.relu(self.fc1(basic_state))
+    def forward(self, state): # Input shape depends on config
+        x = F.relu(self.fc1(state))
         x = F.relu(self.fc2(x))
         value = self.value(x)
         return value
 
 class PPO:
     """Proximal Policy Optimization algorithm implementation."""
-    def __init__(self, config: PPOConfig, device: torch.device = None):
+    def __init__(self, config: PPOConfig, world_config: WorldConfig, device: torch.device = None): # Add world_config
         self.config = config
+        self.world_config = world_config
         self.gamma = config.gamma
         self.gae_lambda = config.gae_lambda
         self.policy_clip = config.policy_clip
         self.n_epochs = config.n_epochs
         self.entropy_coef = config.entropy_coef
         self.value_coef = config.value_coef
+        self.mlp_uses_full_trajectory = config.mlp_uses_full_trajectory
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"PPO Agent using device: {self.device}")
+        if self.mlp_uses_full_trajectory:
+            print(f"PPO Agent using MLP (Processing flattened {self.world_config.trajectory_length}-step trajectory)")
+        else:
+            print(f"PPO Agent using MLP (Processing last basic state of {self.world_config.trajectory_length}-step trajectory)")
 
-        self.actor = PolicyNetwork(config).to(self.device)
-        self.critic = ValueNetwork(config).to(self.device)
+        self.actor = PolicyNetwork(config, world_config).to(self.device)
+        self.critic = ValueNetwork(config, world_config).to(self.device)
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=config.actor_lr)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=config.critic_lr)
-        self.memory = PPOMemory(batch_size=config.batch_size)
+        self.memory = PPOMemory(
+            batch_size=config.batch_size,
+            store_full_trajectory=self.mlp_uses_full_trajectory,
+            trajectory_length=world_config.trajectory_length,
+            feature_dim=world_config.trajectory_feature_dim
+        )
 
     def select_action(self, state: dict, evaluate=False):
-        """Select action based on the *last basic state* in the trajectory."""
-        # Extract the last basic state from the full trajectory
-        last_basic_state_tuple = state['basic_state'] # World now provides this directly
-        # Or: full_trajectory = state['full_trajectory'] # (N, feat_dim)
-        # last_basic_state_tuple = tuple(full_trajectory[-1, :CORE_STATE_DIM])
-
-        state_tensor = torch.FloatTensor(last_basic_state_tuple).to(self.device).unsqueeze(0) # (1, state_dim)
+        """Select action based on the configured state representation."""
+        if self.mlp_uses_full_trajectory:
+            state_representation = state['full_trajectory'] # numpy array (T, F)
+            state_tensor = torch.FloatTensor(state_representation).to(self.device).unsqueeze(0) # (1, T, F)
+            # Flatten for MLP input
+            input_tensor = state_tensor.view(1, -1) # (1, T*F)
+            store_representation = state_representation # Store the numpy array
+        else:
+            state_representation = state['basic_state'] # tuple
+            state_tensor = torch.FloatTensor(state_representation).to(self.device).unsqueeze(0) # (1, S)
+            input_tensor = state_tensor # Already correct shape
+            store_representation = state_representation # Store the tuple
 
         with torch.no_grad():
             if evaluate:
-                action_mean, _ = self.actor.forward(state_tensor)
+                action_mean, _ = self.actor.forward(input_tensor)
                 action_normalized = torch.tanh(action_mean)
             else:
-                action_normalized, log_prob = self.actor.sample(state_tensor)
-                value = self.critic(state_tensor)
+                action_normalized, log_prob = self.actor.sample(input_tensor)
+                value = self.critic(input_tensor)
 
-                # Store the *individual basic state* and associated info
+                # Store the appropriate representation
                 self.memory.store(
-                    last_basic_state_tuple,
+                    store_representation,
                     action_normalized.cpu().numpy()[0, 0], # float action
-                    log_prob.cpu().numpy()[0, 0], # float log_prob (already shape (1,1))
-                    value.cpu().numpy()[0, 0],    # float value (already shape (1,1))
+                    log_prob.cpu().numpy()[0, 0], # float log_prob
+                    value.cpu().numpy()[0, 0],    # float value
                     0, False # Placeholder reward, done - will be updated later
                 )
 
@@ -166,16 +198,19 @@ class PPO:
 
     def store_transition(self, reward, done):
         """Store reward and done flag for the last transition in memory."""
-        # Only update if the last entry is still using placeholder values
-        if self.memory.rewards and self.memory.rewards[-1] == 0 and self.memory.dones[-1] is False:
+        if self.memory.rewards and len(self.memory.rewards) < len(self.memory.states):
             self.memory.rewards[-1] = reward
             self.memory.dones[-1] = done
         elif len(self.memory.rewards) < len(self.memory.states):
-            # This case should not happen if select_action always stores
-             print("Warning: PPO store_transition mismatch")
-             # Fallback: Append if lists are shorter
+             print("Warning: PPO store_transition mismatch, lengths don't match yet.")
+             # This path might be needed if store is called before select_action finishes
+             # Append if lists are shorter, hoping it aligns later
              self.memory.rewards.append(reward)
              self.memory.dones.append(done)
+        # If lengths are equal, assume last one needs update (original logic)
+        elif self.memory.rewards and self.memory.rewards[-1] == 0 and self.memory.dones[-1] is False:
+             self.memory.rewards[-1] = reward
+             self.memory.dones[-1] = done
 
 
     def update_parameters(self):
@@ -185,9 +220,9 @@ class PPO:
         returns = self._compute_returns_and_advantages() # Shape (n_steps,)
         actor_losses, critic_losses, entropies = [], [], []
 
-        # Generate batches using individual basic states stored in memory
+        # Generate batches using appropriate state representation stored in memory
         states_arr, actions_arr, old_log_probs_arr, values_arr, _, _, batches = self.memory.generate_batches()
-        # Shapes: states(N, s_dim), actions(N, 1), old_log_probs(N, 1), values(N, 1)
+        # Shapes: states (N, S) or (N, T, F), actions(N, 1), old_log_probs(N, 1), values(N, 1)
 
         advantages = returns - values_arr.squeeze() # (N,)
         advantages = torch.tensor(advantages, dtype=torch.float32).unsqueeze(1).to(self.device) # (N, 1)
@@ -196,13 +231,20 @@ class PPO:
 
         for _ in range(self.n_epochs):
             for batch_indices in batches:
-                batch_states = torch.tensor(states_arr[batch_indices], dtype=torch.float32).to(self.device) # (batch, s_dim)
+                # Select batch based on indices
+                batch_states_raw = states_arr[batch_indices] # (batch, S) or (batch, T, F)
                 batch_actions = torch.tensor(actions_arr[batch_indices], dtype=torch.float32).to(self.device)
                 batch_old_log_probs = torch.tensor(old_log_probs_arr[batch_indices], dtype=torch.float32).to(self.device)
                 batch_returns = returns[batch_indices]
                 batch_advantages = advantages[batch_indices]
 
-                # Evaluate using the basic states
+                # Prepare state tensor for network input
+                batch_states = torch.tensor(batch_states_raw, dtype=torch.float32).to(self.device)
+                if self.mlp_uses_full_trajectory:
+                    # Flatten the trajectory dimension: (batch, T, F) -> (batch, T*F)
+                    batch_states = batch_states.view(batch_states.size(0), -1)
+
+                # Evaluate using the prepared batch_states
                 new_log_probs, entropy = self.actor.evaluate(batch_states, batch_actions)
                 new_values = self.critic(batch_states)
 
@@ -226,7 +268,7 @@ class PPO:
                 critic_losses.append(critic_loss.item())
                 entropies.append(entropy.mean().item())
 
-        self.memory.clear() # Clear memory (individual transitions)
+        self.memory.clear() # Clear memory
 
         return {'actor_loss': np.mean(actor_losses), 'critic_loss': np.mean(critic_losses), 'entropy': np.mean(entropies)}
 
@@ -242,17 +284,18 @@ class PPO:
         last_value = 0 # Assume 0 if last state was terminal
         # If last state wasn't terminal, we need its value V(s_N)
         if not dones[-1]:
-            # Get last basic state tuple and compute its value
-            last_basic_state_tuple = self.memory.states[-1]
-            last_state_tensor = torch.FloatTensor(last_basic_state_tuple).to(self.device).unsqueeze(0)
+            # Get last state representation (basic state tuple or full trajectory array)
+            last_state_repr = self.memory.states[-1]
+            last_state_tensor = torch.FloatTensor(last_state_repr).to(self.device).unsqueeze(0) # (1, S) or (1, T, F)
+            if self.mlp_uses_full_trajectory:
+                last_state_tensor = last_state_tensor.view(1, -1) # Flatten if needed
+
             with torch.no_grad():
                 last_value = self.critic(last_state_tensor).cpu().numpy()[0, 0]
 
         # Iterate backwards
         for step in reversed(range(len(rewards))):
             # Value of next state: V(s_{t+1})
-            # If t is the last step (N-1), next_value is last_value calculated above
-            # Otherwise, next_value is values[t+1] (stored value of s_{t+1})
             next_value = last_value if step == len(rewards) - 1 else values[step + 1]
 
             delta = rewards[step] + self.gamma * next_value * (1 - int(dones[step])) - values[step]
@@ -293,7 +336,7 @@ def train_ppo(config: DefaultConfig, use_multi_gpu: bool = False, run_evaluation
     writer = SummaryWriter(log_dir=log_dir)
     print(f"TensorBoard logs: {log_dir}")
 
-    # Device Setup (same as before)
+    # Device Setup
     if torch.cuda.is_available():
         if use_multi_gpu: print(f"Warn: Multi-GPU not standard for PPO. Using: {cuda_device}")
         device = torch.device(cuda_device)
@@ -304,10 +347,11 @@ def train_ppo(config: DefaultConfig, use_multi_gpu: bool = False, run_evaluation
     else:
         device = torch.device("cpu"); print("GPU not available, using CPU.")
 
-    agent = PPO(config=ppo_config, device=device)
+    # Pass world_config to agent
+    agent = PPO(config=ppo_config, world_config=world_config, device=device)
     os.makedirs(train_config.models_dir, exist_ok=True)
 
-    # Checkpoint loading (same as before)
+    # Checkpoint loading
     model_files = [f for f in os.listdir(train_config.models_dir) if f.startswith("ppo_") and f.endswith(".pt")]
     latest_model_path = None
     if model_files:
@@ -340,14 +384,14 @@ def train_ppo(config: DefaultConfig, use_multi_gpu: bool = False, run_evaluation
 
     for episode in pbar:
         world.reset()
-        state = world.encode_state() # state is dict with trajectory
+        state = world.encode_state() # state is dict with trajectory/basic_state
         episode_reward = 0
         episode_steps = 0
         learn_steps = 0 # Track steps collected for the current update cycle
 
         for step_in_episode in range(train_config.max_steps):
-            # Select action using last basic state from trajectory
-            action_normalized = agent.select_action(state, evaluate=False) # Stores basic_state in memory
+            # Select action using configured state representation
+            action_normalized = agent.select_action(state, evaluate=False) # Stores state repr in memory
 
             step_start_time = time.time()
             world.step(action_normalized, training=True, terminal_step=(step_in_episode == train_config.max_steps - 1))
@@ -358,7 +402,7 @@ def train_ppo(config: DefaultConfig, use_multi_gpu: bool = False, run_evaluation
             next_state = world.encode_state() # Get next state dict
             done = world.done
 
-            # Store reward and done for the *individual transition* stored earlier
+            # Store reward and done for the transition stored earlier
             agent.store_transition(reward, done)
 
             state = next_state # Update world state dict for next iteration
@@ -367,10 +411,10 @@ def train_ppo(config: DefaultConfig, use_multi_gpu: bool = False, run_evaluation
             total_steps += 1
             learn_steps += 1
 
-            # Check if enough *individual transitions* collected for an update
+            # Check if enough transitions collected for an update
             if learn_steps >= update_frequency:
                 update_start_time = time.time()
-                losses = agent.update_parameters() # Uses memory with individual transitions
+                losses = agent.update_parameters() # Uses memory with stored state repr
                 update_time = time.time() - update_start_time
                 if losses:
                     timing_metrics['parameter_update_time'].append(update_time)
@@ -448,7 +492,7 @@ def evaluate_ppo(agent: PPO, config: DefaultConfig): # Takes full config
 
     for episode in range(eval_config.num_episodes):
         world.reset()
-        state = world.encode_state() # Initial state dict with trajectory
+        state = world.encode_state() # Initial state dict with trajectory/basic_state
         episode_reward = 0
         episode_frames = []
 
@@ -462,7 +506,7 @@ def evaluate_ppo(agent: PPO, config: DefaultConfig): # Takes full config
             except Exception as e: print(f"Warn: Vis failed init state. E: {e}")
 
         for step in range(eval_config.max_steps):
-            # PPO selects action based on last basic state in trajectory
+            # PPO selects action based on configured state representation
             action_normalized = agent.select_action(state, evaluate=True)
 
             world.step(action_normalized, training=False, terminal_step=(step == eval_config.max_steps - 1))
