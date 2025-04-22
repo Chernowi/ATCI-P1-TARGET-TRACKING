@@ -11,19 +11,21 @@ class SACConfig(BaseModel):
     """Configuration for the SAC agent"""
     state_dim: int = Field(CORE_STATE_DIM, description="Dimension of the basic state tuple within the trajectory")
     action_dim: int = Field(CORE_ACTION_DIM, description="Action dimension (yaw_change)")
-    hidden_dims: List[int] = Field([32, 32], description="List of hidden layer dimensions for MLP part")
+    # NOTE: action_scale in WorldConfig (max_yaw_change) is the primary scaling factor now.
+    # This might be redundant or used differently in the agent implementation. Assuming agent outputs [-1, 1].
+    # action_scale: float = Field(math.pi / 4, description="Maximum magnitude of yaw change action (scales the [-1, 1] output)")
+    hidden_dims: List[int] = Field([128, 128], description="List of hidden layer dimensions for MLP part")
     log_std_min: int = Field(-20, description="Minimum log std for action distribution")
     log_std_max: int = Field(2, description="Maximum log std for action distribution")
-    lr: float = Field(5e-6, description="Learning rate")
+    lr: float = Field(5e-5, description="Learning rate")
     gamma: float = Field(0.99, description="Discount factor")
     tau: float = Field(0.01, description="Target network update rate")
     alpha: float = Field(0.2, description="Temperature parameter (Initial value if auto-tuning)")
     auto_tune_alpha: bool = Field(True, description="Whether to auto-tune the alpha parameter")
     use_rnn: bool = Field(True, description="Whether to use RNN layers in Actor/Critic (Recommended for trajectory state)")
     rnn_type: Literal['lstm', 'gru'] = Field('lstm', description="Type of RNN cell (Only used if use_rnn is True)")
-    rnn_hidden_size: int = Field(32, description="Hidden size of RNN layers (Only used if use_rnn is True)")
+    rnn_hidden_size: int = Field(128, description="Hidden size of RNN layers (Only used if use_rnn is True)")
     rnn_num_layers: int = Field(1, description="Number of RNN layers (Only used if use_rnn is True)")
-    mlp_uses_full_trajectory: bool = Field(False, description="If True and use_rnn=False, MLP Actor/Critic use flattened full trajectory as input instead of last basic state.")
 
 
 class TSACConfig(SACConfig):
@@ -36,11 +38,10 @@ class TSACConfig(SACConfig):
     transformer_hidden_dim: int = Field(512, description="Hidden dimension within Transformer layers (FeedForward network)")
     use_layer_norm_actor: bool = Field(True, description="Apply Layer Normalization in Actor MLP layers")
     alpha: float = Field(0.1, description="Temperature parameter (Initial value if auto-tuning)") # Override SAC alpha
-    mlp_uses_full_trajectory: bool = Field(False, description="If True, MLP Actor uses flattened full trajectory as input instead of last basic state.") # Note: Critic is always Transformer
 
 class PPOConfig(BaseModel):
     """Configuration for the PPO agent"""
-    state_dim: int = Field(CORE_STATE_DIM, description="Dimension of the basic state tuple (used if mlp_uses_full_trajectory=False)")
+    state_dim: int = Field(CORE_STATE_DIM, description="Dimension of the basic state tuple (PPO uses the last state of trajectory)")
     action_dim: int = Field(CORE_ACTION_DIM, description="Action dimension (yaw_change)")
     # action_scale: float = Field(math.pi / 4, description="Maximum magnitude of yaw change action") # See note in SACConfig
     hidden_dim: int = Field(256, description="Hidden layer dimension")
@@ -56,24 +57,23 @@ class PPOConfig(BaseModel):
     value_coef: float = Field(0.5, description="Value loss coefficient")
     batch_size: int = Field(1024, description="Batch size for training")
     steps_per_update: int = Field(8192, description="Environment steps between PPO updates")
-    mlp_uses_full_trajectory: bool = Field(False, description="If True, MLP Actor/Critic use flattened full trajectory as input instead of last basic state.")
 
 class ReplayBufferConfig(BaseModel):
     """Configuration for the replay buffer"""
-    capacity: int = Field(500000, description="Maximum capacity of replay buffer (stores full trajectories)")
+    capacity: int = Field(100000, description="Maximum capacity of replay buffer (stores full trajectories)")
     gamma: float = Field(0.99, description="Discount factor for returns")
 
 class TrainingConfig(BaseModel):
     """Configuration for training"""
-    num_episodes: int = Field(30000, description="Number of episodes to train")
-    max_steps: int = Field(300, description="Maximum steps per episode")
-    batch_size: int = Field(32, description="Batch size for training (Number of trajectories sampled)")
-    save_interval: int = Field(1000, description="Interval (in episodes) for saving models")
+    num_episodes: int = Field(5000, description="Number of episodes to train")
+    max_steps: int = Field(200, description="Maximum steps per episode")
+    batch_size: int = Field(512, description="Batch size for training (Number of trajectories sampled)")
+    save_interval: int = Field(100, description="Interval (in episodes) for saving models")
     log_frequency: int = Field(1, description="Frequency (in episodes) for logging to TensorBoard")
     models_dir: str = Field("sac_models", description="Directory for saving models")
     learning_starts: int = Field(8000, description="Number of steps to collect before starting training updates")
-    train_freq: int = Field(30, description="Update the policy every n environment steps")
-    gradient_steps: int = Field(20, description="How many gradient steps to perform when training frequency is met")
+    train_freq: int = Field(20, description="Update the policy every n environment steps")
+    gradient_steps: int = Field(1, description="How many gradient steps to perform when training frequency is met")
 
 class EvaluationConfig(BaseModel):
     """Configuration for evaluation"""
@@ -121,7 +121,7 @@ class ParticleFilterConfig(BaseModel):
 
 class LeastSquaresConfig(BaseModel):
     """Configuration for the Least Squares estimator"""
-    history_size: int = Field(8, description="Number of measurements to keep in history")
+    history_size: int = Field(10, description="Number of measurements to keep in history")
     min_points_required: int = Field(3, description="Minimum number of points required for estimation")
     position_buffer_size: int = Field(5, description="Number of position estimates to keep for velocity calculation")
     velocity_smoothing: int = Field(3, description="Number of position points to use for velocity smoothing")
@@ -187,6 +187,14 @@ class WorldConfig(BaseModel):
     success_bonus: float = Field(100.0, description="Bonus reward added upon reaching success_threshold")
     # step_penalty: float = Field(0.1, description="Penalty subtracted each step") # Optional: Keep if desired, but tracking.py didn't have explicit step penalty
 
+    # --- Old Reward Parameters (Commented out/Removed) ---
+    # reward_scale: float = 0.005 # Replaced by new factors
+    # distance_threshold: float = 50.0 # Replaced by reward_distance_threshold and max_distance_for_reward
+    # error_threshold: float = 1.0 # Replaced by reward_error_threshold
+    # min_safe_distance: float = 2.0 # Concept replaced by collision_threshold penalty
+    # out_of_range_penalty: float = 100.0 # Replaced by new out_of_range_penalty (usually smaller)
+    # out_of_range_threshold: float = 100.0 # Replaced by max_observable_range
+
     # --- Landmark Estimator ---
     estimator_config: ParticleFilterConfig | LeastSquaresConfig = Field(default_factory=LeastSquaresConfig, description="Configuration for the landmark estimator")
 
@@ -206,33 +214,51 @@ class DefaultConfig(BaseModel):
     cuda_device: str = Field("cuda:0", description="CUDA device to use (e.g., 'cuda:0', 'cuda:1', 'cpu')")
     algorithm: str = Field("sac", description="RL algorithm to use ('sac', 'ppo', or 'tsac')")
 
+    # Using model_post_init for Pydantic V2 compatibility
     def model_post_init(self, __context):
+        self._sync_sequence_lengths()
         self._resolve_estimator_config()
 
+    def _sync_sequence_lengths(self):
+        # Sequence length is primarily determined by world.trajectory_length
+        # Agent configs don't need explicit sequence_length if they use world's value
+        pass # Placeholder if any future sync is needed
+
     def _resolve_estimator_config(self):
-        if isinstance(self.world.estimator_config, type):
+        # Ensure the estimator config in WorldConfig points to the correct instance
+        # based on some logic (e.g., a separate setting or default)
+        # Example: Defaulting to LeastSquares, but could be based on another field
+        if isinstance(self.world.estimator_config, type): # If it's just the class type
             if self.world.estimator_config == ParticleFilterConfig:
                 self.world.estimator_config = self.particle_filter
             elif self.world.estimator_config == LeastSquaresConfig:
                 self.world.estimator_config = self.least_squares
-            else:
+            else: # Default case
                  self.world.estimator_config = self.least_squares
         elif not isinstance(self.world.estimator_config, (ParticleFilterConfig, LeastSquaresConfig)):
+             # If it's somehow invalid, default it
              print("Warning: Invalid estimator_config type in WorldConfig, defaulting to LeastSquares.")
              self.world.estimator_config = self.least_squares
 
 
 default_config = DefaultConfig()
 
+# --- Standard SAC Config (Example) ---
 sac_default_config = DefaultConfig()
 sac_default_config.algorithm = "sac"
-sac_default_config.sac.use_rnn = True
-sac_default_config.world.trajectory_length = 8
+sac_default_config.sac.use_rnn = True # Recommended for trajectory state
+sac_default_config.world.trajectory_length = 8 # Example
+# Make SAC use Particle Filter
 sac_default_config.world.estimator_config = sac_default_config.particle_filter
+# Manually call sync/resolve after changes if needed outside init
+# sac_default_config._sync_sequence_lengths()
+# sac_default_config._resolve_estimator_config()
 
+
+# --- T-SAC Default Config (Example) ---
 tsac_default_config = DefaultConfig()
 tsac_default_config.algorithm = "tsac"
-tsac_default_config.world.trajectory_length = 8
+tsac_default_config.world.trajectory_length = 8 # Must match transformer needs
 tsac_default_config.tsac.embedding_dim = 128
 tsac_default_config.tsac.transformer_n_layers = 2
 tsac_default_config.tsac.transformer_n_heads = 4
@@ -241,27 +267,35 @@ tsac_default_config.tsac.lr = 1e-4
 tsac_default_config.tsac.alpha = 0.1
 tsac_default_config.training.learning_starts = 2000
 tsac_default_config.training.batch_size = 128
+# tsac_default_config._sync_sequence_lengths()
+# tsac_default_config._resolve_estimator_config()
 
+
+# --- Vast Config (Example for large scale training, maybe T-SAC) ---
 vast_config = DefaultConfig()
 vast_config.algorithm = "tsac"
-vast_config.world.trajectory_length = 16
+vast_config.world.trajectory_length = 16 # Longer sequence
 vast_config.training.num_episodes = 50000
 vast_config.training.max_steps = 200
 vast_config.training.save_interval = 5000
-vast_config.training.batch_size = 128
+vast_config.training.batch_size = 128 # Maybe increase?
 vast_config.training.learning_starts = 5000
+# Set vast config to use particle filter
 vast_config.world.estimator_config = vast_config.particle_filter
 vast_config.particle_filter.num_particles = 5000
 vast_config.world.randomize_agent_initial_location = True
 vast_config.world.randomize_landmark_initial_location = True
 vast_config.world.randomize_landmark_initial_velocity = True
-vast_config.tsac.hidden_dims = [512, 512, 256]
+vast_config.tsac.hidden_dims = [512, 512, 256] # Actor/Critic MLP hidden dims
 vast_config.tsac.embedding_dim = 256
 vast_config.tsac.transformer_n_layers = 4
 vast_config.tsac.transformer_n_heads = 8
 vast_config.tsac.transformer_hidden_dim = 1024
 vast_config.tsac.lr = 5e-5
 vast_config.tsac.alpha = 0.05
+# vast_config._sync_sequence_lengths()
+# vast_config._resolve_estimator_config()
+
 
 CONFIGS: Dict[str, DefaultConfig] = {
     "default": default_config,
@@ -269,5 +303,15 @@ CONFIGS: Dict[str, DefaultConfig] = {
     "tsac_default": tsac_default_config,
     "vast": vast_config,
 }
+# Ensure 'default' config uses a valid algorithm setting if needed
 if default_config.algorithm not in ["sac", "ppo", "tsac"]:
     default_config.algorithm = "sac"
+    # default_config._sync_sequence_lengths() # Not needed anymore
+
+# Ensure default config's estimator is resolved
+# default_config._resolve_estimator_config() # Resolved on init
+
+# Final checks on example configs to ensure estimator is resolved
+# sac_default_config._resolve_estimator_config() # Resolved on init
+# tsac_default_config._resolve_estimator_config() # Resolved on init
+# vast_config._resolve_estimator_config() # Resolved on init

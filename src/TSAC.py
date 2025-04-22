@@ -10,7 +10,7 @@ import time
 import math
 from collections import deque
 from tqdm import tqdm
-from world import World, WorldConfig # Import WorldConfig
+from world import World
 from configs import DefaultConfig, ReplayBufferConfig, TSACConfig, TrainingConfig, CORE_STATE_DIM, CORE_ACTION_DIM, TRAJECTORY_REWARD_DIM
 from torch.utils.tensorboard import SummaryWriter
 from typing import Tuple, Optional, List
@@ -80,31 +80,24 @@ class PositionalEncoding(nn.Module):
         return x + self.pe[:, :x.size(1)]
 
 
-# --- T-SAC Actor (MLP based, uses last state or full trajectory) ---
+# --- T-SAC Actor (MLP based, uses last state) ---
 
 class Actor(nn.Module):
-    """Policy network (Actor) for T-SAC."""
+    """Policy network (Actor) for T-SAC. Uses the last basic_state from trajectory."""
 
     def __init__(self, config: TSACConfig, world_config: WorldConfig):
         super(Actor, self).__init__()
         self.config = config
         self.world_config = world_config
         self.use_layer_norm = config.use_layer_norm_actor
-        self.mlp_uses_full_trajectory = config.mlp_uses_full_trajectory
         self.state_dim = config.state_dim # Basic state dim (8)
         self.action_dim = config.action_dim
-        self.trajectory_length = world_config.trajectory_length
-        self.feature_dim = world_config.trajectory_feature_dim
-
-        if self.mlp_uses_full_trajectory:
-             mlp_input_dim = self.trajectory_length * self.feature_dim
-        else:
-             mlp_input_dim = self.state_dim # Input is the last basic state
+        # self.trajectory_length = world_config.trajectory_length # Not directly used by MLP actor
 
         self.layers = nn.ModuleList()
-        current_dim = mlp_input_dim
+        mlp_input_dim = self.state_dim # Input is the last basic state
         for i, hidden_dim in enumerate(config.hidden_dims):
-            linear_layer = nn.Linear(current_dim, hidden_dim)
+            linear_layer = nn.Linear(mlp_input_dim, hidden_dim)
             nn.init.kaiming_uniform_(linear_layer.weight, a=math.sqrt(5))
             if linear_layer.bias is not None:
                  fan_in, _ = nn.init._calculate_fan_in_and_fan_out(linear_layer.weight)
@@ -114,7 +107,7 @@ class Actor(nn.Module):
             if self.use_layer_norm:
                  self.layers.append(nn.LayerNorm(hidden_dim))
             self.layers.append(nn.ReLU())
-            current_dim = hidden_dim
+            mlp_input_dim = hidden_dim
 
         self.mean = nn.Linear(config.hidden_dims[-1], self.action_dim)
         nn.init.xavier_uniform_(self.mean.weight, gain=0.01)
@@ -128,14 +121,11 @@ class Actor(nn.Module):
         self.log_std_max = config.log_std_max
 
     def forward(self, state_trajectory: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass."""
+        """Forward pass using only the last basic state."""
         # state_trajectory shape: (batch, seq_len, feature_dim)
-        if self.mlp_uses_full_trajectory:
-             mlp_input = state_trajectory.view(state_trajectory.size(0), -1) # Flatten
-        else:
-             mlp_input = state_trajectory[:, -1, :self.state_dim] # Last basic state
+        last_basic_state = state_trajectory[:, -1, :self.state_dim] # (batch, state_dim)
 
-        x = mlp_input
+        x = last_basic_state
         for layer in self.layers:
             x = layer(x)
 
@@ -248,7 +238,6 @@ class TSAC:
         self.tau = config.tau
         self.alpha = config.alpha
         self.auto_tune_alpha = config.auto_tune_alpha
-        self.mlp_uses_full_trajectory = config.mlp_uses_full_trajectory # Actor config
         self.sequence_length = world_config.trajectory_length # N
         self.action_dim = config.action_dim
 
@@ -257,12 +246,7 @@ class TSAC:
         else:
             self.device = device
         print(f"T-SAC Agent using device: {self.device}")
-        print(f"T-SAC Critic using Transformer (SeqLen: {self.sequence_length})")
-        if self.mlp_uses_full_trajectory:
-             print(f"T-SAC Actor using MLP (Processing flattened {self.sequence_length}-step trajectory)")
-        else:
-             print(f"T-SAC Actor using MLP (Processing last state of {self.sequence_length}-step trajectory)")
-
+        print(f"T-SAC using Sequence Length (N): {self.sequence_length}")
 
         self.actor = Actor(config, world_config).to(self.device)
         self.critic1 = TransformerCritic(config, world_config).to(self.device)
@@ -287,7 +271,7 @@ class TSAC:
             self.log_alpha = torch.tensor(np.log(self.alpha)).to(self.device)
 
     def select_action(self, state: dict, evaluate: bool = False) -> float:
-        """Select action (normalized yaw change) based on the state trajectory."""
+        """Select action (normalized yaw change) based on the *last* state in the trajectory."""
         state_trajectory = state['full_trajectory']
         state_tensor = torch.FloatTensor(state_trajectory).to(self.device).unsqueeze(0) # (1, N, feat_dim)
 
@@ -307,74 +291,100 @@ class TSAC:
         if sampled_batch is None:
             return None
 
+        # state_batch shape: (b, N, feat_dim) -> Trajectory ending at s_{N-1}
+        # action_batch shape: (b, 1) -> Action a_{N-1} taken after s_{N-1}
+        # reward_batch shape: (b,) -> Reward r_{N-1} received after a_{N-1}
+        # next_state_batch shape: (b, N, feat_dim) -> Trajectory ending at s_{N}
+        # done_batch shape: (b,) -> Done flag for state s_{N}
         state_batch, action_batch_current, reward_batch, next_state_batch, done_batch = sampled_batch
 
         state_batch = torch.FloatTensor(state_batch).to(self.device)
+        # action_batch_current = torch.FloatTensor(action_batch_current).to(self.device) # Action a_{N-1}
         reward_batch = torch.FloatTensor(reward_batch).to(self.device).unsqueeze(1) # (b, 1)
         next_state_batch = torch.FloatTensor(next_state_batch).to(self.device)
         done_batch = torch.FloatTensor(done_batch).to(self.device).unsqueeze(1) # (b, 1)
 
+        # Extract information needed for Transformer Critic
+        # Initial state s_t is the *first* basic state in the state_batch trajectory
         initial_state_critic = state_batch[:, 0, :self.config.state_dim] # Shape: (b, state_dim)
+
+        # Action sequence a_t...a_{t+N-1} needs to be reconstructed/extracted
+        # state_batch contains (basic_state_k, action_{k-1}, reward_{k-1}) for k=t..t+N-1
+        # We need actions a_t to a_{t+N-1}
+        # action_{t+k-1} is stored at index k in the state_batch trajectory
         action_sequence = state_batch[:, 1:, self.config.state_dim:self.config.state_dim+self.config.action_dim] # (b, N-1, action_dim) actions a_t..a_{t+N-2}
+        # The last action a_{t+N-1} is action_batch_current
         action_sequence = torch.cat([action_sequence, torch.FloatTensor(action_batch_current).to(self.device).unsqueeze(1)], dim=1) # (b, N, action_dim)
 
         # --- Critic Update ---
         with torch.no_grad():
+            # Calculate N-step targets G(n+1) for n=0..N-1
+            # Get policy actions and log probs for the *next* states
+            # next_state_batch contains trajectories ending at s_{t+N}
+            # We need states s_{t+1} to s_{t+N}
+            target_q_values_list = []
+            cumulative_rewards = torch.zeros_like(reward_batch[:, 0]).to(self.device) # (b,)
+            discount_factor = torch.ones_like(reward_batch[:, 0]).to(self.device) # (b,)
+
+            # rewards_in_state_batch are r_{t-1} to r_{t+N-2}
+            # We need r_t to r_{t+N-1}
+            # r_{t+k-1} is at index k in state_batch
             rewards_sequence = state_batch[:, 1:, -1] # (b, N-1) rewards r_t..r_{t+N-2}
             rewards_sequence = torch.cat([rewards_sequence, reward_batch], dim=1) # (b, N) rewards r_t..r_{t+N-1}
 
+            # dones_in_state_batch correspond to states s_t..s_{t+N-1}
+            # We need dones for s_{t+1}..s_{t+N}
+            # Need to extract done flags corresponding to next_state_batch elements? No, buffer gives done for the state *after* the final action.
+
+            # Let's recalculate target using Bellman expectation over the sequence length N
+            # Target for Q(s_t, a_t...a_{t+N-1}) is E[ sum(gamma^k * r_{t+k}) + gamma^N * V(s_{t+N}) ]
+            # V(s) = min Q_target(s, a') - alpha * log_pi(a'|s)
+
+            # State s_{t+N} is the last basic state in the next_state_batch trajectory
             s_t_plus_N = next_state_batch[:, -1, :self.config.state_dim] # (b, state_dim)
 
-            # Actor needs the full next_state_batch trajectory
+            # Action and log_prob for s_{t+N}
+            # Actor needs the full next_state_batch trajectory to compute action for its last state
             next_action_N, next_log_prob_N, _ = self.actor.sample(next_state_batch) # (b, 1), (b, 1)
 
-            # Target critics need the *initial state* s_{t+N} and the sequence a'_{t+N}..a'_{t+2N-1}
-            # We only need Q(s_{t+N}, a'_{t+N}), so pass just the first action.
-            # Transformer Critic expects a sequence, so we need to fabricate one?
-            # Or does the target critic need a different structure if the actor is MLP?
-            # Let's assume the target critic still needs a sequence input, but we only care about the first Q value.
-            # We need a sequence starting with next_action_N. Let's just use next_action_N repeated for simplicity,
-            # as only the first output Q(s_{t+N}, a'_{t+N}) is used.
-            # This feels potentially incorrect. The original paper likely used an RNN actor with the Transformer critic.
-            # Let's stick to the N-step Q value calculation from the paper:
-            # V(s) = E_a' [ Q_targ(s, a') - alpha * log pi(a'|s) ]
-            # Target Y = r_t + gamma * r_{t+1} + ... + gamma^(N-1)r_{t+N-1} + gamma^N * V(s_{t+N})
-
-            # Get V(s_{t+N})
-            # Need Q_targ(s_{t+N}, a'_{t+N}) - alpha * log pi(a'_{t+N} | s_{t+N})
-            # Q_targ needs s_{t+N} and action sequence [a'_{t+N}, ...]
-            # Let's use the first element from target critics, assuming they can take single state + seq
-            # This requires the target critic to handle initial_state and action_sequence properly.
-            # Let's try passing just the required single next action N in a sequence of length 1
-            # Pad action sequence for target critic?
-            # Assume target critic forward can handle state + single action -> Q(s,a)
-            # Let's try just passing the single action in a seq of length 1
-
-            target_q1_N_seq = self.critic1_target(s_t_plus_N, next_action_N.unsqueeze(1)) # (b, 1, 1)
-            target_q2_N_seq = self.critic2_target(s_t_plus_N, next_action_N.unsqueeze(1)) # (b, 1, 1)
-            target_q1_N = target_q1_N_seq[:, 0] # (b, 1)
-            target_q2_N = target_q2_N_seq[:, 0] # (b, 1)
-
+            # Target Q for s_{t+N}, a'_{t+N}
+            # Target critics need the *initial state* s_{t+N} and the single action a'_{t+N}
+            # Reshape next_action_N for critic: (b, 1, action_dim)
+            target_q1_N = self.critic1_target(s_t_plus_N, next_action_N.unsqueeze(1))[:, 0] # (b, 1)
+            target_q2_N = self.critic2_target(s_t_plus_N, next_action_N.unsqueeze(1))[:, 0] # (b, 1)
             target_q_min_N = torch.min(target_q1_N, target_q2_N) # (b, 1)
+
+            # Target Value V(s_{t+N})
             current_alpha = self.log_alpha.exp()
             target_V_N = target_q_min_N - current_alpha * next_log_prob_N # (b, 1)
 
+            # Calculate cumulative discounted reward sum(gamma^k * r_{t+k}) for k=0..N-1
             discounted_rewards = torch.zeros_like(reward_batch).to(self.device) # (b, 1)
             gamma_pow = 1.0
             for k in range(self.sequence_length):
                 discounted_rewards += gamma_pow * rewards_sequence[:, k].unsqueeze(1) # (b, 1)
                 gamma_pow *= self.gamma
 
+            # Final N-step target Y
             y = discounted_rewards + (gamma_pow * (1.0 - done_batch) * target_V_N) # (b, 1)
 
+        # --- Calculate Current Q predictions ---
+        # Get Q-value for the *full sequence* from current critics
+        # We need the Q-value corresponding to the *last* action in the sequence, Q(s_t, a_t...a_{t+N-1})
         current_q1_preds_seq = self.critic1(initial_state_critic, action_sequence) # (b, N, 1)
         current_q2_preds_seq = self.critic2(initial_state_critic, action_sequence) # (b, N, 1)
-        current_q1_N = current_q1_preds_seq[:, -1, :] # (b, 1) Use last Q value for N-step target comparison
+
+        # We compare the target 'y' with the predicted Q-value for the full N-step horizon,
+        # which should be the last element of the critic output sequence.
+        current_q1_N = current_q1_preds_seq[:, -1, :] # (b, 1)
         current_q2_N = current_q2_preds_seq[:, -1, :] # (b, 1)
 
+        # --- Calculate Critic Loss ---
+        # Loss compares the N-step target 'y' with the critic's prediction for the N-step Q-value
         critic1_loss = F.mse_loss(current_q1_N, y)
         critic2_loss = F.mse_loss(current_q2_N, y)
 
+        # Optimize Critics
         self.critic1_optimizer.zero_grad()
         critic1_loss.backward()
         self.critic1_optimizer.step()
@@ -387,17 +397,19 @@ class TSAC:
         for p in self.critic1.parameters(): p.requires_grad = False
         for p in self.critic2.parameters(): p.requires_grad = False
 
-        # Use the *current* state trajectory (state_batch) for actor update
-        action_pi_t, log_prob_pi_t, _ = self.actor.sample(state_batch) # (b, 1), (b, 1) Action for s_t
+        # Get policy action and log prob for the initial state s_t (using the state_batch trajectory)
+        action_pi_t, log_prob_pi_t, _ = self.actor.sample(state_batch) # (b, 1), (b, 1)
 
-        # Need Q(s_t, a_t) from critics
-        # Reconstruct action sequence starting with policy action a_t
+        # Get Q-value for s_t and the policy action a_t
+        # We need the Q-value for the *first* step (n=0) from the critics.
+        # Critic requires s_t and the sequence starting with a_t.
+        # Reconstruct action sequence starting with a_t: [a_t, a_{t+1}, ..., a_{t+N-1}]
         action_sequence_pi = torch.cat([action_pi_t.unsqueeze(1), action_sequence[:, 1:, :]], dim=1) # (b, N, action_dim)
 
         q1_pi_seq = self.critic1(initial_state_critic, action_sequence_pi) # (b, N, 1)
         q2_pi_seq = self.critic2(initial_state_critic, action_sequence_pi) # (b, N, 1)
 
-        # Use the Q-value for the first step (n=0) which corresponds to Q(s_t, a_t)
+        # Use the Q-value for the first step (n=0)
         q1_pi = q1_pi_seq[:, 0, :] # (b, 1)
         q2_pi = q2_pi_seq[:, 0, :] # (b, 1)
         q_pi_min = torch.min(q1_pi, q2_pi) # (b, 1)
@@ -405,6 +417,7 @@ class TSAC:
         current_alpha = self.log_alpha.exp()
         actor_loss = (current_alpha * log_prob_pi_t - q_pi_min).mean()
 
+        # Optimize Actor
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
         self.actor_optimizer.step()
