@@ -14,7 +14,7 @@ class SACConfig(BaseModel):
     # NOTE: action_scale in WorldConfig (max_yaw_change) is the primary scaling factor now.
     # This might be redundant or used differently in the agent implementation. Assuming agent outputs [-1, 1].
     # action_scale: float = Field(math.pi / 4, description="Maximum magnitude of yaw change action (scales the [-1, 1] output)")
-    hidden_dims: List[int] = Field([128, 128], description="List of hidden layer dimensions for MLP part")
+    hidden_dims: List[int] = Field([64, 64], description="List of hidden layer dimensions for MLP part")
     log_std_min: int = Field(-20, description="Minimum log std for action distribution")
     log_std_max: int = Field(2, description="Maximum log std for action distribution")
     lr: float = Field(5e-5, description="Learning rate")
@@ -22,7 +22,7 @@ class SACConfig(BaseModel):
     tau: float = Field(0.01, description="Target network update rate")
     alpha: float = Field(0.2, description="Temperature parameter (Initial value if auto-tuning)")
     auto_tune_alpha: bool = Field(True, description="Whether to auto-tune the alpha parameter")
-    use_rnn: bool = Field(True, description="Whether to use RNN layers in Actor/Critic (Recommended for trajectory state)")
+    use_rnn: bool = Field(False, description="Whether to use RNN layers in Actor/Critic (Recommended for trajectory state)")
     rnn_type: Literal['lstm', 'gru'] = Field('lstm', description="Type of RNN cell (Only used if use_rnn is True)")
     rnn_hidden_size: int = Field(128, description="Hidden size of RNN layers (Only used if use_rnn is True)")
     rnn_num_layers: int = Field(1, description="Number of RNN layers (Only used if use_rnn is True)")
@@ -65,15 +65,15 @@ class ReplayBufferConfig(BaseModel):
 
 class TrainingConfig(BaseModel):
     """Configuration for training"""
-    num_episodes: int = Field(5000, description="Number of episodes to train")
+    num_episodes: int = Field(30000, description="Number of episodes to train")
     max_steps: int = Field(200, description="Maximum steps per episode")
     batch_size: int = Field(512, description="Batch size for training (Number of trajectories sampled)")
     save_interval: int = Field(100, description="Interval (in episodes) for saving models")
     log_frequency: int = Field(1, description="Frequency (in episodes) for logging to TensorBoard")
-    models_dir: str = Field("sac_models", description="Directory for saving models")
+    models_dir: str = Field("models", description="Directory for saving models")
     learning_starts: int = Field(8000, description="Number of steps to collect before starting training updates")
-    train_freq: int = Field(20, description="Update the policy every n environment steps")
-    gradient_steps: int = Field(1, description="How many gradient steps to perform when training frequency is met")
+    train_freq: int = Field(30, description="Update the policy every n environment steps")
+    gradient_steps: int = Field(20, description="How many gradient steps to perform when training frequency is met")
 
 class EvaluationConfig(BaseModel):
     """Configuration for evaluation"""
@@ -296,10 +296,13 @@ vast_config.tsac.alpha = 0.05
 # vast_config._sync_sequence_lengths()
 # vast_config._resolve_estimator_config()
 
+sac_rnn_config = DefaultConfig()
+sac_rnn_config.sac.use_rnn = True
 
 CONFIGS: Dict[str, DefaultConfig] = {
     "default": default_config,
     "sac_default": sac_default_config,
+    "sac_rnn": sac_rnn_config,
     "tsac_default": tsac_default_config,
     "vast": vast_config,
 }

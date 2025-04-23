@@ -203,26 +203,8 @@ class World():
 
         # 8. Check for termination conditions (AFTER reward and history update)
         self.done = False
-        true_agent_landmark_dist = self._calculate_range_measurement(
-            self.agent.location, self.true_landmark.location
-        )
 
-        # Done if estimation error is low enough (success)
-        if self.error_dist <= self.success_threshold:
-            # print(f"Done: Success threshold reached ({self.error_dist:.3f} <= {self.success_threshold:.3f})") # Debug
-            self.done = True
-        # Done if agent collides with true landmark
-        elif true_agent_landmark_dist < self.world_config.collision_threshold:
-            # print(f"Done: Collision threshold reached ({true_agent_landmark_dist:.3f} < {self.world_config.collision_threshold:.3f})") # Debug
-            self.done = True
-        # Done if forced terminal step
-        elif terminal_step:
-            # print("Done: Forced terminal step") # Debug
-            self.done = True
-        # Optional: Done if agent goes too far (out of bounds) - requires config param
-        # elif 'world_boundary_range' in self.world_config.__dict__ and \
-        #      true_agent_landmark_dist > self.world_config.world_boundary_range:
-        #     self.done = True
+        self.done = terminal_step
 
 
     def _calculate_reward(self):
@@ -230,27 +212,13 @@ class World():
         Calculate reward based on current state (AFTER step), matching tracking.py logic conceptually.
         Reward is assigned to self.reward.
         """
-        rew = 0.0
 
         # --- Config parameters ---
-        # Error related
-        rew_err_th = self.world_config.reward_error_threshold
-        low_error_bonus = self.world_config.low_error_bonus
-        high_error_penalty_factor = self.world_config.high_error_penalty_factor
-        uninitialized_penalty = self.world_config.uninitialized_penalty
         # Distance related (to TRUE landmark)
         rew_dis_th = self.world_config.reward_distance_threshold
         close_distance_bonus = self.world_config.close_distance_bonus
         distance_reward_scale = self.world_config.distance_reward_scale
         max_distance_for_reward = self.world_config.max_distance_for_reward
-        # Penalty related
-        max_range = self.world_config.max_observable_range
-        out_of_range_penalty = self.world_config.out_of_range_penalty
-        collision_threshold = self.world_config.collision_threshold
-        landmark_collision_penalty = self.world_config.landmark_collision_penalty
-        # Optional out of bounds penalty
-        # out_of_bounds_penalty = getattr(self.world_config, 'out_of_bounds_penalty', 0.0)
-        # world_boundary_range = getattr(self.world_config, 'world_boundary_range', float('inf'))
 
         # --- Get current state values ---
         estimation_error = self.error_dist # Based on updated estimate
@@ -261,43 +229,17 @@ class World():
         # --- 1. Reward/Penalty based on Estimation Error ---
         # Check if estimator has produced a valid location
         if estimation_error != float('inf') and self.estimated_landmark.estimated_location is not None:
-            if estimation_error < rew_err_th:
-                # Bonus for low estimation error
-                rew += low_error_bonus
-            else:
-                # Penalize proportionally to how much error exceeds the threshold
-                # Ensures penalty increases as error gets worse
-                rew -= high_error_penalty_factor * (estimation_error - rew_err_th)
-        else:
-            # Penalty if the estimator hasn't produced a valid estimate yet
-            rew -= uninitialized_penalty
+            self.reward += np.clip(np.log(1/estimation_error) + 1, 6, -6)
 
         # --- 2. Reward based on Agent's distance to TRUE Landmark ---
         if true_agent_landmark_dist < rew_dis_th:
             # Bonus for being very close to the true landmark
-            rew += close_distance_bonus
+            self.reward += close_distance_bonus
         elif true_agent_landmark_dist < max_distance_for_reward:
             # Scaled reward for being reasonably close (encourages approach)
             # Reward decreases as distance increases up to max_distance_for_reward
-            rew += distance_reward_scale * (max_distance_for_reward - true_agent_landmark_dist)
-        # No specific reward/penalty if beyond max_distance_for_reward but within max_range
-
-        # --- 3. Penalties based on Agent's distance to TRUE Landmark ---
-        # Out of Range Penalty (based on true distance)
-        if true_agent_landmark_dist > max_range:
-            rew -= out_of_range_penalty
-
-        # Landmark Collision Penalty (based on true distance)
-        if true_agent_landmark_dist < collision_threshold:
-            rew -= landmark_collision_penalty
-
-        # Optional: Out of Bounds Penalty
-        # if true_agent_landmark_dist > world_boundary_range:
-        #     rew -= out_of_bounds_penalty
-
-        # --- 4. Clipping ---
-        # Use clipping values from the original implementation or config
-        self.reward = np.clip(rew, -150.0, 150.0)
+            self.reward += distance_reward_scale * (max_distance_for_reward - true_agent_landmark_dist)
+        
 
 
     def encode_state(self) -> Dict[str, Any]:
