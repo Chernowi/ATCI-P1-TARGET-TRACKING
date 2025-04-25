@@ -11,9 +11,6 @@ class SACConfig(BaseModel):
     """Configuration for the SAC agent"""
     state_dim: int = Field(CORE_STATE_DIM, description="Dimension of the basic state tuple within the trajectory")
     action_dim: int = Field(CORE_ACTION_DIM, description="Action dimension (yaw_change)")
-    # NOTE: action_scale in WorldConfig (max_yaw_change) is the primary scaling factor now.
-    # This might be redundant or used differently in the agent implementation. Assuming agent outputs [-1, 1].
-    # action_scale: float = Field(math.pi / 4, description="Maximum magnitude of yaw change action (scales the [-1, 1] output)")
     hidden_dims: List[int] = Field([64, 64], description="List of hidden layer dimensions for MLP part")
     log_std_min: int = Field(-20, description="Minimum log std for action distribution")
     log_std_max: int = Field(2, description="Maximum log std for action distribution")
@@ -161,7 +158,7 @@ class WorldConfig(BaseModel):
 
     # --- Observations & Noise ---
     range_measurement_base_noise: float = Field(0.01, description="Base standard deviation of range measurement noise")
-    range_measurement_distance_factor: float = Field(0.1, description="Factor by which range noise std dev increases with distance")
+    range_measurement_distance_factor: float = Field(0.05, description="Factor by which range noise std dev increases with distance")
 
     # --- Termination Conditions ---
     success_threshold: float = Field(0.5, description="Estimation error (2D distance) below which the episode is considered successful")
