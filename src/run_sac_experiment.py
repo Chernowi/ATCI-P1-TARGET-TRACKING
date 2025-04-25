@@ -33,7 +33,8 @@ def run_experiment(config_name: str, model_path: str, num_episodes: int, max_ste
     print(f"Using device: {device}")
 
     # Use SAC config from the loaded DefaultConfig
-    agent = SAC(config=config.sac, device=device)
+    # SAC constructor requires sac_config, world_config, and device
+    agent = SAC(config=config.sac, world_config=config.world, device=device)
 
     if not os.path.exists(model_path):
         # Try default directory if only filename is given

@@ -43,7 +43,6 @@ class TrackedTargetLS:
                 self._observer_locations.append(observer_2d_loc)
                 self._range_measurements.append(range_measurement)
                 self._timestamps_of_measurements.append(self._current_timestamp)
-                # new_measurement_added = True # Variable not used
 
                 if len(self._observer_locations) > self.history_size:
                     self._observer_locations.pop(0)

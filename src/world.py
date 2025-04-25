@@ -21,7 +21,6 @@ class World():
         """
         self.world_config = world_config
         self.dt = world_config.dt
-        # Success threshold based on estimation error
         self.success_threshold = world_config.success_threshold
         self.agent_speed = world_config.agent_speed
         self.max_yaw_change = world_config.yaw_angle_range[1] # Assumes symmetric range around 0
@@ -121,9 +120,8 @@ class World():
     def _get_basic_state_tuple(self) -> Tuple:
         """ Encodes the instantaneous basic state observation. """
         agent_loc, agent_vel = self.agent.location, self.agent.velocity
-        # Use estimate if available, otherwise use agent's position as placeholder? Or zeros? Using zeros.
         est_loc = self.estimated_landmark.estimated_location if self.estimated_landmark.estimated_location else Location(0,0,0)
-        landmark_x, landmark_y, landmark_depth = est_loc.x, est_loc.y, 0.0 # Use estimated landmark pos (depth assumed 0 for basic state)
+        landmark_x, landmark_y, landmark_depth = est_loc.x, est_loc.y, 0.0
 
         return (agent_loc.x, agent_loc.y, agent_vel.x, agent_vel.y,
                 landmark_x, landmark_y, landmark_depth, self.current_range)
@@ -131,11 +129,8 @@ class World():
     def _initialize_trajectory_history(self):
         """Fills the initial trajectory history with padding or initial state."""
         initial_basic_state = self._get_basic_state_tuple()
-        initial_action = 0.0 # Normalized action
+        initial_action = 0.0
         initial_reward = 0.0
-        # Padding with zeros
-        # padding_feature = np.zeros(self.feature_dim, dtype=np.float32)
-        # Padding with repeated initial state/action/reward
         initial_feature = np.concatenate([
              np.array(initial_basic_state, dtype=np.float32),
              np.array([initial_action], dtype=np.float32),
@@ -156,16 +151,16 @@ class World():
             training (bool): Flag indicating if rewards/termination should be calculated.
             terminal_step (bool): Flag if this is the forced terminal step.
         """
-        # 1. Store previous state information for the trajectory history
-        prev_basic_state = self._get_basic_state_tuple()
-        prev_action = yaw_change_normalized
-        prev_reward = self.reward # Reward received *from* the previous state transition
+        # 1. Store previous state info AND the reward obtained FROM the previous step
+        prev_basic_state = self._get_basic_state_tuple() # State s_t
+        prev_action = yaw_change_normalized           # Action a_t
+        reward_from_previous_step = self.reward       # Reward r_t (calculated in the *previous* call to step)
 
         # 2. Apply action and update world dynamics
         yaw_change = yaw_change_normalized * self.max_yaw_change
         current_vx, current_vy = self.agent.velocity.x, self.agent.velocity.y
         current_heading = math.atan2(current_vy, current_vx)
-        new_heading = (current_heading + yaw_change + math.pi) % (2 * math.pi) - math.pi # Wrap angle correctly
+        new_heading = (current_heading + yaw_change + math.pi) % (2 * math.pi) - math.pi
         new_vx = self.agent_speed * math.cos(new_heading)
         new_vy = self.agent_speed * math.sin(new_heading)
         self.agent.velocity = Velocity(new_vx, new_vy, 0.0)
@@ -179,31 +174,30 @@ class World():
 
         # 4. Update estimator
         pf_start_time = time.time()
-        self.estimated_landmark.update(dt=self.dt, has_new_range=True, # Assume new range is always available after step
-                                     range_measurement=noisy_range,
-                                     observer_location=self.agent.location)
+        
+        has_new_range = np.random.rand() <= 0.75  # Simulate lost signal
+        self.estimated_landmark.update(dt=self.dt, has_new_range=has_new_range,
+                         range_measurement=noisy_range,
+                         observer_location=self.agent.location)
         self.pf_update_time = time.time() - pf_start_time
 
         # 5. Update error dist based on NEW estimate
         self._update_error_dist()
 
-        # 6. Calculate reward for the completed transition
+        # 6. Calculate reward for the transition (s_t -> s_{t+1}) and store it for the *next* step's history
         if training:
-            self._calculate_reward() # Reward is based on the state *after* the action
+            self._calculate_reward() # Updates self.reward based on state s_{t+1}. This becomes r_{t+1}
         else:
-            self.reward = 0.0 # Use current self.reward (which is from prev step) for history if not training
+            self.reward = 0.0 # Reset reward for next step if not training
 
-        # 7. Update trajectory history with the state *before* the action
+        # 7. Update trajectory history with the state/action *before* the step and reward *from before* that
         current_feature_vector = np.concatenate([
-            np.array(prev_basic_state, dtype=np.float32),
-            np.array([prev_action], dtype=np.float32),
-            np.array([self.reward], dtype=np.float32) # Use the newly calculated reward
+            np.array(prev_basic_state, dtype=np.float32), # State s_t
+            np.array([prev_action], dtype=np.float32),    # Action a_t
+            np.array([reward_from_previous_step], dtype=np.float32) # Reward r_t
         ])
         self._trajectory_history.append(current_feature_vector)
-
-        # 8. Check for termination conditions (AFTER reward and history update)
-        self.done = False
-
+    
         self.done = terminal_step
 
 
@@ -212,14 +206,8 @@ class World():
         Calculate reward based on current state (AFTER step), matching tracking.py logic conceptually.
         Reward is assigned to self.reward.
         """
-
-        # --- Config parameters ---
-        # Distance related (to TRUE landmark)
-        rew_dis_th = self.world_config.reward_distance_threshold
-        close_distance_bonus = self.world_config.close_distance_bonus
-        distance_reward_scale = self.world_config.distance_reward_scale
-        max_distance_for_reward = self.world_config.max_distance_for_reward
-
+        self.reward = 0.0 # Reset reward for this step
+        
         # --- Get current state values ---
         estimation_error = self.error_dist # Based on updated estimate
         true_agent_landmark_dist = self._calculate_range_measurement(
@@ -229,32 +217,30 @@ class World():
         # --- 1. Reward/Penalty based on Estimation Error ---
         # Check if estimator has produced a valid location
         if estimation_error != float('inf') and self.estimated_landmark.estimated_location is not None:
-            self.reward += np.clip(np.log(1/estimation_error) + 1, 6, -6)
+            self.reward += np.clip(np.log(1/estimation_error) + 1, -6, 6)
 
-        # --- 2. Reward based on Agent's distance to TRUE Landmark ---
-        if true_agent_landmark_dist < rew_dis_th:
-            # Bonus for being very close to the true landmark
-            self.reward += close_distance_bonus
-        elif true_agent_landmark_dist < max_distance_for_reward:
-            # Scaled reward for being reasonably close (encourages approach)
-            # Reward decreases as distance increases up to max_distance_for_reward
-            self.reward += distance_reward_scale * (max_distance_for_reward - true_agent_landmark_dist)
+        self.reward *= 0.05
         
+        if true_agent_landmark_dist < 5: # Hard penalty for being too close
+            self.reward -= 0.5
 
-
+        
+        # --- 2. Distance-based penalty
+        self.reward -= 0.001 * true_agent_landmark_dist 
+    
+        
+        
     def encode_state(self) -> Dict[str, Any]:
         """
         Encodes the current state as a trajectory dictionary.
         """
         trajectory = np.array(self._trajectory_history, dtype=np.float32)
         estimator_state = self.estimated_landmark.encode_state()
-
-        # Basic state is now implicitly the last element of the trajectory
         last_basic_state = tuple(trajectory[-1, :CORE_STATE_DIM])
 
         return {
-            'basic_state': last_basic_state, # Last basic state for convenience/PPO
-            'full_trajectory': trajectory,   # Shape (N, feature_dim)
+            'basic_state': last_basic_state,
+            'full_trajectory': trajectory,
             'estimator_state': estimator_state
         }
 
@@ -262,7 +248,6 @@ class World():
         """ Decodes a state dictionary back into world objects, including trajectory history. """
         if 'full_trajectory' not in state or 'estimator_state' not in state:
             print("Warning: Invalid state format for decoding (missing keys)")
-            # Attempt recovery if possible, or re-initialize? Re-init is safer.
             self.reset()
             return
 
@@ -273,61 +258,44 @@ class World():
            full_trajectory.shape != (self.trajectory_length, self.feature_dim):
             print(f"Warning: decode_state trajectory has wrong shape/type. "
                   f"Expected: ({self.trajectory_length}, {self.feature_dim}), Got: {full_trajectory.shape if isinstance(full_trajectory, np.ndarray) else type(full_trajectory)}")
-            # Attempt recovery or re-initialize
             self.reset()
             return
 
-        # Restore trajectory history deque
         self._trajectory_history.clear()
         for i in range(self.trajectory_length):
             self._trajectory_history.append(full_trajectory[i])
 
-        # Restore agent/landmark/estimator state from the *last* entry in the trajectory
-        # This reflects the state *after* the last action was taken.
         last_step_features = full_trajectory[-1]
         last_basic_state = last_step_features[:CORE_STATE_DIM]
-        # last_action = last_step_features[CORE_STATE_DIM] # Action leading to this state
-        last_reward = last_step_features[CORE_STATE_DIM + CORE_ACTION_DIM] # Reward resulting from the transition *to* this state
+        # The reward stored here is reward_t, from the transition ending at state s_t (last_basic_state)
+        reward_leading_to_current_state = last_step_features[CORE_STATE_DIM + CORE_ACTION_DIM]
 
-        # Restore Agent state
         self.agent.location.x, self.agent.location.y = last_basic_state[0], last_basic_state[1]
         self.agent.velocity.x, self.agent.velocity.y = last_basic_state[2], last_basic_state[3]
-        # Agent Z velocity and depth are assumed 0 or handled elsewhere if needed
 
-        # Restore Estimated landmark location (part of basic_state)
         est_x, est_y, est_depth = last_basic_state[4], last_basic_state[5], last_basic_state[6]
         if self.estimated_landmark.estimated_location is None:
              self.estimated_landmark.estimated_location = Location(est_x, est_y, est_depth)
         else:
              self.estimated_landmark.estimated_location.x = est_x
              self.estimated_landmark.estimated_location.y = est_y
-             self.estimated_landmark.estimated_location.depth = est_depth # Depth might be 0 here
+             self.estimated_landmark.estimated_location.depth = est_depth
 
-        self.current_range = last_basic_state[7] # Restore last observed noisy range
-        self.reward = last_reward # Restore the reward associated with reaching this state
+        self.current_range = last_basic_state[7]
+        self.reward = reward_leading_to_current_state # Restore the reward that led to this state
 
-        # Restore the internal state of the estimator
-        # Crucial: Need to ensure the true landmark state is *not* overwritten here,
-        # only the estimator's belief. The true landmark is part of the environment dynamics.
         self.estimated_landmark.decode_state(estimator_state)
-
-        # Update error and done status based on restored *estimated* state and the *true* landmark state
-        # The true landmark state should ideally be restored separately if saving/loading the whole env state.
-        # Assuming self.true_landmark is correctly maintained or restored elsewhere.
         self._update_error_dist()
 
-        # Recalculate done status based on restored state
         true_agent_landmark_dist = self._calculate_range_measurement(
             self.agent.location, self.true_landmark.location
         )
         self.done = (self.error_dist <= self.success_threshold or
                      true_agent_landmark_dist < self.world_config.collision_threshold)
-        # Add other done conditions if applicable (e.g., out of bounds)
 
 
     def reset(self):
         """ Resets the world to an initial state defined by the config. """
-        # Re-initialize agent, landmark, estimator using the stored config
         self.__init__(self.world_config)
 
 
@@ -340,7 +308,6 @@ class World():
             if self.estimated_landmark.estimated_velocity:
                 est_vel = self.estimated_landmark.estimated_velocity
                 est_vel_str = f", Vel:(vx:{est_vel.x:.2f}, vy:{est_vel.y:.2f})"
-            # Include depth if relevant
             est_depth_str = f", d:{est_loc.depth:.2f}" if hasattr(est_loc, 'depth') else ""
             est_str = f"Est Lmk ({self.estimator_type}): Pos:(x:{est_loc.x:.2f}, y:{est_loc.y:.2f}{est_depth_str}){est_vel_str}"
 

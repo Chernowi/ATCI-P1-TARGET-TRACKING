@@ -66,11 +66,11 @@ class ReplayBufferConfig(BaseModel):
 class TrainingConfig(BaseModel):
     """Configuration for training"""
     num_episodes: int = Field(30000, description="Number of episodes to train")
-    max_steps: int = Field(200, description="Maximum steps per episode")
+    max_steps: int = Field(300, description="Maximum steps per episode")
     batch_size: int = Field(512, description="Batch size for training (Number of trajectories sampled)")
     save_interval: int = Field(100, description="Interval (in episodes) for saving models")
     log_frequency: int = Field(1, description="Frequency (in episodes) for logging to TensorBoard")
-    models_dir: str = Field("models", description="Directory for saving models")
+    models_dir: str = Field("models/sac/", description="Directory for saving models")
     learning_starts: int = Field(8000, description="Number of steps to collect before starting training updates")
     train_freq: int = Field(30, description="Update the policy every n environment steps")
     gradient_steps: int = Field(20, description="How many gradient steps to perform when training frequency is met")
@@ -139,7 +139,7 @@ class WorldConfig(BaseModel):
     """Configuration for the world"""
     # --- Basic World Dynamics ---
     dt: float = Field(1.0, description="Time step")
-    agent_speed: float = Field(1.5, description="Constant speed of the agent")
+    agent_speed: float = Field(2.5, description="Constant speed of the agent")
     yaw_angle_range: Tuple[float, float] = Field((-math.pi / 4, math.pi / 4), description="Range of possible yaw angle changes per step [-max_change, max_change]")
 
     # --- Initial Conditions & Randomization ---
@@ -160,8 +160,8 @@ class WorldConfig(BaseModel):
     trajectory_feature_dim: int = Field(CORE_STATE_DIM + CORE_ACTION_DIM + TRAJECTORY_REWARD_DIM, description="Dimension of features per step in trajectory state (basic_state + prev_action + prev_reward)") # 8+1+1=10
 
     # --- Observations & Noise ---
-    range_measurement_base_noise: float = Field(0.1, description="Base standard deviation of range measurement noise")
-    range_measurement_distance_factor: float = Field(0.01, description="Factor by which range noise std dev increases with distance")
+    range_measurement_base_noise: float = Field(0.01, description="Base standard deviation of range measurement noise")
+    range_measurement_distance_factor: float = Field(0.1, description="Factor by which range noise std dev increases with distance")
 
     # --- Termination Conditions ---
     success_threshold: float = Field(0.5, description="Estimation error (2D distance) below which the episode is considered successful")
@@ -175,10 +175,10 @@ class WorldConfig(BaseModel):
     uninitialized_penalty: float = Field(1.0, description="Penalty applied if the estimator hasn't produced a valid estimate yet")
 
     # -- Agent-Landmark Distance Reward (Based on True Distance) --
-    reward_distance_threshold: float = Field(5.0, description="True distance threshold for close distance bonus") # Corresponds to rew_dis_th
+    reward_distance_threshold: float = Field(15.0, description="True distance threshold for close distance bonus") # Corresponds to rew_dis_th
     close_distance_bonus: float = Field(1.0, description="Reward bonus when true distance is below reward_distance_threshold")
-    distance_reward_scale: float = Field(0.01, description="Scaling factor for distance reward shaping (reward = scale * (max_dist - current_dist))") # Needs tuning
-    max_distance_for_reward: float = Field(15.0, description="Maximum true distance up to which distance shaping reward is applied") # Corresponds to 0.7 * scale factor in tracking.py? Needs tuning.
+    distance_reward_scale: float = Field(0.0001, description="Scaling factor for distance reward shaping (reward = scale * (max_dist - current_dist))") # Needs tuning
+    max_distance_for_reward: float = Field(50.0, description="Maximum true distance up to which distance shaping reward is applied") # Corresponds to 0.7 * scale factor in tracking.py? Needs tuning.
 
     # -- Penalties & Bonuses --
     max_observable_range: float = Field(100.0, description="Maximum true distance considered 'in range' for penalty calculation") # Corresponds to set_max_range
@@ -243,18 +243,6 @@ class DefaultConfig(BaseModel):
 
 default_config = DefaultConfig()
 
-# --- Standard SAC Config (Example) ---
-sac_default_config = DefaultConfig()
-sac_default_config.algorithm = "sac"
-sac_default_config.sac.use_rnn = True # Recommended for trajectory state
-sac_default_config.world.trajectory_length = 8 # Example
-# Make SAC use Particle Filter
-sac_default_config.world.estimator_config = sac_default_config.particle_filter
-# Manually call sync/resolve after changes if needed outside init
-# sac_default_config._sync_sequence_lengths()
-# sac_default_config._resolve_estimator_config()
-
-
 # --- T-SAC Default Config (Example) ---
 tsac_default_config = DefaultConfig()
 tsac_default_config.algorithm = "tsac"
@@ -267,6 +255,7 @@ tsac_default_config.tsac.lr = 1e-4
 tsac_default_config.tsac.alpha = 0.1
 tsac_default_config.training.learning_starts = 2000
 tsac_default_config.training.batch_size = 128
+tsac_default_config.training.models_dir = "models/tsac/"
 # tsac_default_config._sync_sequence_lengths()
 # tsac_default_config._resolve_estimator_config()
 
@@ -298,23 +287,11 @@ vast_config.tsac.alpha = 0.05
 
 sac_rnn_config = DefaultConfig()
 sac_rnn_config.sac.use_rnn = True
+sac_rnn_config.training.models_dir = "models/sac_rnn/"
 
 CONFIGS: Dict[str, DefaultConfig] = {
     "default": default_config,
-    "sac_default": sac_default_config,
     "sac_rnn": sac_rnn_config,
     "tsac_default": tsac_default_config,
     "vast": vast_config,
 }
-# Ensure 'default' config uses a valid algorithm setting if needed
-if default_config.algorithm not in ["sac", "ppo", "tsac"]:
-    default_config.algorithm = "sac"
-    # default_config._sync_sequence_lengths() # Not needed anymore
-
-# Ensure default config's estimator is resolved
-# default_config._resolve_estimator_config() # Resolved on init
-
-# Final checks on example configs to ensure estimator is resolved
-# sac_default_config._resolve_estimator_config() # Resolved on init
-# tsac_default_config._resolve_estimator_config() # Resolved on init
-# vast_config._resolve_estimator_config() # Resolved on init
