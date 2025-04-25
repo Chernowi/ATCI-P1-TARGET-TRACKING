@@ -137,7 +137,7 @@ class WorldConfig(BaseModel):
     # --- Basic World Dynamics ---
     dt: float = Field(1.0, description="Time step")
     agent_speed: float = Field(2.5, description="Constant speed of the agent")
-    yaw_angle_range: Tuple[float, float] = Field((-math.pi / 4, math.pi / 4), description="Range of possible yaw angle changes per step [-max_change, max_change]")
+    yaw_angle_range: Tuple[float, float] = Field((-math.pi / 8, math.pi / 8), description="Range of possible yaw angle changes per step [-max_change, max_change]")
 
     # --- Initial Conditions & Randomization ---
     agent_initial_location: Position = Field(default_factory=Position, description="Initial agent position (used if randomization is false)")
@@ -256,39 +256,17 @@ tsac_default_config.training.models_dir = "models/tsac/"
 # tsac_default_config._sync_sequence_lengths()
 # tsac_default_config._resolve_estimator_config()
 
-
-# --- Vast Config (Example for large scale training, maybe T-SAC) ---
-vast_config = DefaultConfig()
-vast_config.algorithm = "tsac"
-vast_config.world.trajectory_length = 16 # Longer sequence
-vast_config.training.num_episodes = 50000
-vast_config.training.max_steps = 200
-vast_config.training.save_interval = 5000
-vast_config.training.batch_size = 128 # Maybe increase?
-vast_config.training.learning_starts = 5000
-# Set vast config to use particle filter
-vast_config.world.estimator_config = vast_config.particle_filter
-vast_config.particle_filter.num_particles = 5000
-vast_config.world.randomize_agent_initial_location = True
-vast_config.world.randomize_landmark_initial_location = True
-vast_config.world.randomize_landmark_initial_velocity = True
-vast_config.tsac.hidden_dims = [512, 512, 256] # Actor/Critic MLP hidden dims
-vast_config.tsac.embedding_dim = 256
-vast_config.tsac.transformer_n_layers = 4
-vast_config.tsac.transformer_n_heads = 8
-vast_config.tsac.transformer_hidden_dim = 1024
-vast_config.tsac.lr = 5e-5
-vast_config.tsac.alpha = 0.05
-# vast_config._sync_sequence_lengths()
-# vast_config._resolve_estimator_config()
-
 sac_rnn_config = DefaultConfig()
 sac_rnn_config.sac.use_rnn = True
 sac_rnn_config.training.models_dir = "models/sac_rnn/"
 
+ppo_config = DefaultConfig()
+ppo_config.algorithm = "ppo"
+ppo_config.training.models_dir = "models/ppo/"
+
 CONFIGS: Dict[str, DefaultConfig] = {
     "default": default_config,
     "sac_rnn": sac_rnn_config,
+    "ppo": ppo_config,
     "tsac_default": tsac_default_config,
-    "vast": vast_config,
 }

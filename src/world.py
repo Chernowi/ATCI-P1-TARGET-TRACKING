@@ -216,8 +216,8 @@ class World():
 
         self.reward *= 0.05
 
-        if true_agent_landmark_dist < 5: # Hard penalty for being too close
-            self.reward -= 0.5
+        if true_agent_landmark_dist < 2: # Hard penalty for being too close
+            self.reward -= 1
 
         self.reward -= 0.001 * true_agent_landmark_dist
 
