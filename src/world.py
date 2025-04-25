@@ -88,24 +88,30 @@ class World():
         self.error_dist = float('inf')
         self.done = False
         self._update_error_dist()
-        self.pf_update_time = 0.0 # Specific to estimator, maybe generalize later
+        self.pf_update_time = 0.0
 
         # Initialize trajectory history
         self._trajectory_history = deque(maxlen=self.trajectory_length)
         self._initialize_trajectory_history()
 
-    def _calculate_range_measurement(self, loc1: Location, loc2: Location) -> float:
+    def _calculate_planar_range_measurement(self, loc1: Location, loc2: Location) -> float:
         """Helper function for 2D range measurement."""
         dx, dy = loc1.x - loc2.x, loc1.y - loc2.y
         return np.sqrt(dx**2 + dy**2)
 
+    def _calculate_true_range_measurement(self, loc1: Location, loc2: Location) -> float:
+        """ Calculate the range in 3D space. """
+        dx, dy, dz = loc1.x - loc2.x, loc1.y - loc2.y, loc1.depth - loc2.depth
+        return np.sqrt(dx**2 + dy**2 + dz**2)
+
     def _get_noisy_range_measurement(self, loc1: Location, loc2: Location) -> float:
         """Calculate range measurement with distance-dependent noise."""
-        true_range = self._calculate_range_measurement(loc1, loc2)
+        planar_range = self._calculate_planar_range_measurement(loc1, loc2)
+        true_range = self._calculate_true_range_measurement(loc1, loc2)
         base_noise = self.world_config.range_measurement_base_noise
         distance_factor = self.world_config.range_measurement_distance_factor
         noise_std_dev = base_noise + distance_factor * true_range
-        noisy_range = true_range + np.random.normal(0, noise_std_dev)
+        noisy_range = planar_range + np.random.normal(0, noise_std_dev)
         return max(0.1, noisy_range) # Ensure range is positive
 
     def _update_error_dist(self):
@@ -122,7 +128,6 @@ class World():
         agent_loc, agent_vel = self.agent.location, self.agent.velocity
         est_loc = self.estimated_landmark.estimated_location if self.estimated_landmark.estimated_location else Location(0,0,0)
         landmark_x, landmark_y, landmark_depth = est_loc.x, est_loc.y, 0.0
-
         return (agent_loc.x, agent_loc.y, agent_vel.x, agent_vel.y,
                 landmark_x, landmark_y, landmark_depth, self.current_range)
 
@@ -136,10 +141,8 @@ class World():
              np.array([initial_action], dtype=np.float32),
              np.array([initial_reward], dtype=np.float32)
         ])
-
         for _ in range(self.trajectory_length):
              self._trajectory_history.append(initial_feature)
-
 
     def step(self, yaw_change_normalized: float, training: bool = True, terminal_step: bool = False):
         """
@@ -164,7 +167,6 @@ class World():
         new_vx = self.agent_speed * math.cos(new_heading)
         new_vy = self.agent_speed * math.sin(new_heading)
         self.agent.velocity = Velocity(new_vx, new_vy, 0.0)
-
         self.agent.update_position(self.dt)
         self.true_landmark.update_position(self.dt)
 
@@ -174,8 +176,7 @@ class World():
 
         # 4. Update estimator
         pf_start_time = time.time()
-        
-        has_new_range = np.random.rand() <= 0.75  # Simulate lost signal
+        has_new_range = np.random.rand() <= 0.9  # Simulate lost signal
         self.estimated_landmark.update(dt=self.dt, has_new_range=has_new_range,
                          range_measurement=noisy_range,
                          observer_location=self.agent.location)
@@ -197,39 +198,29 @@ class World():
             np.array([reward_from_previous_step], dtype=np.float32) # Reward r_t
         ])
         self._trajectory_history.append(current_feature_vector)
-    
-        self.done = terminal_step
 
+        self.done = terminal_step
 
     def _calculate_reward(self):
         """
         Calculate reward based on current state (AFTER step), matching tracking.py logic conceptually.
-        Reward is assigned to self.reward.
         """
-        self.reward = 0.0 # Reset reward for this step
-        
-        # --- Get current state values ---
-        estimation_error = self.error_dist # Based on updated estimate
-        true_agent_landmark_dist = self._calculate_range_measurement(
+        self.reward = 0.0
+        estimation_error = self.error_dist
+        true_agent_landmark_dist = self._calculate_planar_range_measurement(
             self.agent.location, self.true_landmark.location
         )
 
-        # --- 1. Reward/Penalty based on Estimation Error ---
-        # Check if estimator has produced a valid location
         if estimation_error != float('inf') and self.estimated_landmark.estimated_location is not None:
             self.reward += np.clip(np.log(1/estimation_error) + 1, -6, 6)
 
         self.reward *= 0.05
-        
+
         if true_agent_landmark_dist < 5: # Hard penalty for being too close
             self.reward -= 0.5
 
-        
-        # --- 2. Distance-based penalty
-        self.reward -= 0.001 * true_agent_landmark_dist 
-    
-        
-        
+        self.reward -= 0.001 * true_agent_landmark_dist
+
     def encode_state(self) -> Dict[str, Any]:
         """
         Encodes the current state as a trajectory dictionary.
@@ -237,7 +228,6 @@ class World():
         trajectory = np.array(self._trajectory_history, dtype=np.float32)
         estimator_state = self.estimated_landmark.encode_state()
         last_basic_state = tuple(trajectory[-1, :CORE_STATE_DIM])
-
         return {
             'basic_state': last_basic_state,
             'full_trajectory': trajectory,
@@ -287,17 +277,15 @@ class World():
         self.estimated_landmark.decode_state(estimator_state)
         self._update_error_dist()
 
-        true_agent_landmark_dist = self._calculate_range_measurement(
+        true_agent_landmark_dist = self._calculate_planar_range_measurement(
             self.agent.location, self.true_landmark.location
         )
         self.done = (self.error_dist <= self.success_threshold or
                      true_agent_landmark_dist < self.world_config.collision_threshold)
 
-
     def reset(self):
         """ Resets the world to an initial state defined by the config. """
         self.__init__(self.world_config)
-
 
     def __str__(self):
         """String representation of the world state."""
@@ -313,7 +301,7 @@ class World():
 
         true_lmk_str = f"True Lmk: {self.true_landmark}"
         agent_str = f"Agent: {self.agent}"
-        true_dist = self._calculate_range_measurement(self.agent.location, self.true_landmark.location)
+        true_dist = self._calculate_planar_range_measurement(self.agent.location, self.true_landmark.location)
 
         return (f"---\n Reward: {self.reward:.4f}, Done: {self.done}\n"
                 f" Noisy Range: {self.current_range:.2f}, True Range: {true_dist:.2f}, Err (2D): {self.error_dist:.2f}\n"
