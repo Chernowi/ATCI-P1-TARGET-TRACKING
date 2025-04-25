@@ -212,14 +212,14 @@ class World():
         )
 
         if estimation_error != float('inf') and self.estimated_landmark.estimated_location is not None:
-            self.reward += np.clip(np.log(1/estimation_error) + 1, -6, 6)
+            self.reward += np.clip(np.log(1/estimation_error) + 1, -1, 5)
 
         self.reward *= 0.05
 
-        if true_agent_landmark_dist < 2: # Hard penalty for being too close
+        if true_agent_landmark_dist < 1: # Hard penalty for being too close
             self.reward -= 1
 
-        self.reward -= 0.001 * true_agent_landmark_dist
+        self.reward -= 0.0001 * true_agent_landmark_dist
 
     def encode_state(self) -> Dict[str, Any]:
         """
