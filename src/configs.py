@@ -57,15 +57,15 @@ class PPOConfig(BaseModel):
 
 class ReplayBufferConfig(BaseModel):
     """Configuration for the replay buffer"""
-    capacity: int = Field(100000, description="Maximum capacity of replay buffer (stores full trajectories)")
+    capacity: int = Field(1000000, description="Maximum capacity of replay buffer (stores full trajectories)")
     gamma: float = Field(0.99, description="Discount factor for returns")
 
 class TrainingConfig(BaseModel):
     """Configuration for training"""
     num_episodes: int = Field(30000, description="Number of episodes to train")
     max_steps: int = Field(300, description="Maximum steps per episode")
-    batch_size: int = Field(512, description="Batch size for training (Number of trajectories sampled)")
-    save_interval: int = Field(100, description="Interval (in episodes) for saving models")
+    batch_size: int = Field(1024, description="Batch size for training (Number of trajectories sampled)")
+    save_interval: int = Field(1000, description="Interval (in episodes) for saving models")
     log_frequency: int = Field(1, description="Frequency (in episodes) for logging to TensorBoard")
     models_dir: str = Field("models/sac/", description="Directory for saving models")
     learning_starts: int = Field(8000, description="Number of steps to collect before starting training updates")
@@ -157,8 +157,8 @@ class WorldConfig(BaseModel):
     trajectory_feature_dim: int = Field(CORE_STATE_DIM + CORE_ACTION_DIM + TRAJECTORY_REWARD_DIM, description="Dimension of features per step in trajectory state (basic_state + prev_action + prev_reward)") # 8+1+1=10
 
     # --- Observations & Noise ---
-    range_measurement_base_noise: float = Field(0.01, description="Base standard deviation of range measurement noise")
-    range_measurement_distance_factor: float = Field(0.05, description="Factor by which range noise std dev increases with distance")
+    range_measurement_base_noise: float = Field(0.001, description="Base standard deviation of range measurement noise")
+    range_measurement_distance_factor: float = Field(0.005, description="Factor by which range noise std dev increases with distance")
 
     # --- Termination Conditions ---
     success_threshold: float = Field(0.5, description="Estimation error (2D distance) below which the episode is considered successful")
