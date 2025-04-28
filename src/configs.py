@@ -64,9 +64,9 @@ class TrainingConfig(BaseModel):
     """Configuration for training"""
     num_episodes: int = Field(30000, description="Number of episodes to train")
     max_steps: int = Field(300, description="Maximum steps per episode")
-    batch_size: int = Field(1024, description="Batch size for training (Number of trajectories sampled)")
+    batch_size: int = Field(32, description="Batch size for training (Number of trajectories sampled)")
     save_interval: int = Field(1000, description="Interval (in episodes) for saving models")
-    log_frequency: int = Field(1, description="Frequency (in episodes) for logging to TensorBoard")
+    log_frequency: int = Field(10, description="Frequency (in episodes) for logging to TensorBoard")
     models_dir: str = Field("models/sac/", description="Directory for saving models")
     learning_starts: int = Field(8000, description="Number of steps to collect before starting training updates")
     train_freq: int = Field(30, description="Update the policy every n environment steps")
@@ -120,6 +120,9 @@ class LeastSquaresConfig(BaseModel):
     """Configuration for the Least Squares estimator"""
     history_size: int = Field(10, description="Number of measurements to keep in history")
     min_points_required: int = Field(3, description="Minimum number of points required for estimation")
+    location_smoothing_factor: float = Field(0.8, 
+        description="Smoothing factor for location updates (0=no update from LS, 1=instant update, lower values mean smoother/slower updates)"
+    )
     position_buffer_size: int = Field(5, description="Number of position estimates to keep for velocity calculation")
     velocity_smoothing: int = Field(3, description="Number of position points to use for velocity smoothing")
     min_observer_movement: float = Field(0.5, description="Minimum movement required between measurement points")
