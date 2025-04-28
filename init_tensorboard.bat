@@ -1,0 +1,1 @@
+tensorboard --logdir=C:/Users/Pedro/Documents/MAI/ATCI/ATCI-P1/runs

@@ -9,70 +9,73 @@ import random
 import time
 from collections import deque
 from tqdm import tqdm
+
+# Local imports
 from world import World
-from world_objects import Velocity
-from visualization import visualize_world, reset_trajectories, save_gif
-from configs import DefaultConfig, ReplayBufferConfig, SACConfig, TrainingConfig
+from configs import DefaultConfig, ReplayBufferConfig, SACConfig, WorldConfig, CORE_STATE_DIM
 from torch.utils.tensorboard import SummaryWriter
 from typing import Tuple, Optional
+from utils import RunningMeanStd
 
 class ReplayBuffer:
-    """Experience replay buffer to store and sample transitions, potentially sequences."""
+    """Experience replay buffer storing full state trajectories."""
 
-    def __init__(self, config: ReplayBufferConfig):
+    def __init__(self, config: ReplayBufferConfig, world_config: WorldConfig):
         self.buffer = deque(maxlen=config.capacity)
+        self.config = config
+        self.trajectory_length = world_config.trajectory_length
+        self.feature_dim = world_config.trajectory_feature_dim
 
     def push(self, state, action, reward, next_state, done):
-        self.buffer.append((state, action, reward, next_state, done))
+        """ Add a new experience to memory. """
+        trajectory = state['full_trajectory']
+        next_trajectory = next_state['full_trajectory']
+        if isinstance(action, (np.ndarray, list)): action = action[0]
+        if isinstance(reward, (np.ndarray)): reward = reward.item()
 
-    def sample(self, batch_size: int, sequence_length: int = 1) -> Tuple:
-        """Sample a batch of transitions or sequences from the buffer."""
-        if sequence_length <= 1:
-            # Sample individual transitions
-            if len(self.buffer) < batch_size:
-                 raise ValueError("Not enough transitions in buffer to sample.")
+        # Basic validation
+        if not isinstance(trajectory, np.ndarray) or trajectory.shape != (self.trajectory_length, self.feature_dim):
+            # print(f"Warning: Pushing trajectory with incorrect shape {trajectory.shape}. Expected ({self.trajectory_length}, {self.feature_dim})")
+            return
+        if not isinstance(next_trajectory, np.ndarray) or next_trajectory.shape != (self.trajectory_length, self.feature_dim):
+            # print(f"Warning: Pushing next_trajectory with incorrect shape {next_trajectory.shape}. Expected ({self.trajectory_length}, {self.feature_dim})")
+            return
+        if np.isnan(trajectory).any() or np.isnan(next_trajectory).any():
+             # print("Warning: Pushing trajectory with NaN values.")
+             return # Skip pushing if NaNs are present
+
+        self.buffer.append((trajectory, float(action), float(reward), next_trajectory, done))
+
+    def sample(self, batch_size: int) -> Optional[Tuple]:
+        """Sample a batch of experiences from memory."""
+        if len(self.buffer) < batch_size:
+            return None
+        try:
             batch = random.sample(self.buffer, batch_size)
-            state, action, reward, next_state, done = zip(*batch)
-            return (np.array(state), np.array(action),
-                    np.array(reward, dtype=np.float32),
-                    np.array(next_state), np.array(done, dtype=np.float32))
-        else:
-            # Sample sequences
-            states, actions, rewards, next_states, dones = [], [], [], [], []
-            # Ensure we have enough space for sequences and sample valid start indices
-            # A sequence is valid if it fits in the buffer and does not contain 'done=True' except possibly at the very end
-            valid_indices = [i for i in range(len(self.buffer) - sequence_length + 1)
-                             if not any(self.buffer[i+k][4] for k in range(sequence_length - 1))]
+        except ValueError:
+            print(f"Warning: ReplayBuffer sampling failed. len(buffer)={len(self.buffer)}, batch_size={batch_size}")
+            return None
 
-            if len(valid_indices) < batch_size:
-                 # Fallback or raise error, here we sample with replacement from valid indices if needed
-                 if not valid_indices:
-                     raise ValueError("Not enough valid sequences in buffer to sample.")
-                 sampled_indices = random.choices(valid_indices, k=batch_size)
-            else:
-                 sampled_indices = random.sample(valid_indices, batch_size)
+        trajectory, action, reward, next_trajectory, done = zip(*batch)
 
+        try:
+            trajectory_arr = np.array(trajectory, dtype=np.float32)
+            action_arr = np.array(action, dtype=np.float32).reshape(-1, 1) # Shape (batch, 1)
+            reward_arr = np.array(reward, dtype=np.float32) # Shape (batch,)
+            next_trajectory_arr = np.array(next_trajectory, dtype=np.float32)
+            done_arr = np.array(done, dtype=np.float32) # Shape (batch,)
 
-            for idx in sampled_indices:
-                seq_s, seq_a, seq_r, seq_ns, seq_d = [], [], [], [], []
-                for i in range(sequence_length):
-                    s, a, r, ns, d = self.buffer[idx + i]
-                    seq_s.append(s)
-                    seq_a.append(a)
-                    seq_r.append(r)
-                    seq_ns.append(ns)
-                    seq_d.append(d)
-                states.append(seq_s)
-                actions.append(seq_a)
-                rewards.append(seq_r)
-                next_states.append(seq_ns)
-                dones.append(seq_d)
+            # Check for NaNs after conversion (optional but good practice)
+            if np.isnan(trajectory_arr).any() or np.isnan(next_trajectory_arr).any():
+                print("Warning: Sampled batch contains NaN values. Returning None.")
+                return None
 
-            # Shape: (batch_size, sequence_length, feature_dim)
-            return (np.array(states), np.array(actions),
-                    np.array(rewards, dtype=np.float32),
-                    np.array(next_states), np.array(dones, dtype=np.float32))
+        except Exception as e:
+            print(f"Error converting sampled batch to numpy arrays: {e}")
+            # Potentially log more details about the batch here if needed
+            return None
 
+        return (trajectory_arr, action_arr, reward_arr, next_trajectory_arr, done_arr)
 
     def __len__(self):
         return len(self.buffer)
@@ -81,53 +84,66 @@ class ReplayBuffer:
 class Actor(nn.Module):
     """Policy network (Actor) for SAC, optionally with RNN."""
 
-    def __init__(self, config: SACConfig):
+    def __init__(self, config: SACConfig, world_config: WorldConfig):
         super(Actor, self).__init__()
+        self.config = config
+        self.world_config = world_config
         self.use_rnn = config.use_rnn
-        self.rnn_hidden_size = config.rnn_hidden_size
-        self.rnn_num_layers = config.rnn_num_layers
-        self.rnn_type = config.rnn_type
+        self.state_dim = config.state_dim # Dimension of basic state
+        self.action_dim = config.action_dim
+        self.trajectory_length = world_config.trajectory_length
 
-        input_dim = config.state_dim
         if self.use_rnn:
-            if self.rnn_type == 'lstm':
-                self.rnn = nn.LSTM(input_size=config.state_dim, hidden_size=config.rnn_hidden_size,
+            self.rnn_hidden_size = config.rnn_hidden_size
+            self.rnn_num_layers = config.rnn_num_layers
+            rnn_input_dim = self.state_dim # RNN processes normalized basic states
+            if config.rnn_type == 'lstm':
+                self.rnn = nn.LSTM(input_size=rnn_input_dim, hidden_size=config.rnn_hidden_size,
                                    num_layers=config.rnn_num_layers, batch_first=True)
-            elif self.rnn_type == 'gru':
-                self.rnn = nn.GRU(input_size=config.state_dim, hidden_size=config.rnn_hidden_size,
+            elif config.rnn_type == 'gru':
+                self.rnn = nn.GRU(input_size=rnn_input_dim, hidden_size=config.rnn_hidden_size,
                                   num_layers=config.rnn_num_layers, batch_first=True)
             else:
-                raise ValueError(f"Unsupported RNN type: {self.rnn_type}")
-            input_dim = config.rnn_hidden_size
+                raise ValueError(f"Unsupported RNN type: {config.rnn_type}")
+            mlp_input_dim = config.rnn_hidden_size
+        else:
+            # MLP uses only the normalized last basic state
+            mlp_input_dim = self.state_dim
+            self.rnn = None
 
         self.layers = nn.ModuleList()
-        mlp_input_dim = input_dim
+        current_dim = mlp_input_dim
         for hidden_dim in config.hidden_dims:
-            self.layers.append(nn.Linear(mlp_input_dim, hidden_dim))
-            mlp_input_dim = hidden_dim
+            self.layers.append(nn.Linear(current_dim, hidden_dim))
+            self.layers.append(nn.ReLU())
+            current_dim = hidden_dim
 
-        self.mean = nn.Linear(config.hidden_dims[-1], config.action_dim)
-        self.log_std = nn.Linear(config.hidden_dims[-1], config.action_dim)
+        self.mean = nn.Linear(current_dim, self.action_dim)
+        self.log_std = nn.Linear(current_dim, self.action_dim)
 
         self.log_std_min = config.log_std_min
         self.log_std_max = config.log_std_max
 
-    def forward(self, state: torch.Tensor, hidden_state: Optional[Tuple[torch.Tensor, torch.Tensor]] = None) -> Tuple[torch.Tensor, torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
-        """Forward pass through the network, handling RNN if enabled."""
+    def forward(self, network_input: torch.Tensor, hidden_state: Optional[Tuple] = None) -> Tuple[torch.Tensor, torch.Tensor, Optional[Tuple]]:
+        """Forward pass through the network.
+           Expects pre-normalized basic state(s).
+           network_input shape:
+             - RNN: (batch, seq_len, state_dim) - normalized basic state sequence
+             - MLP: (batch, state_dim) - normalized last basic state
+        """
+        next_hidden_state = None
         if self.use_rnn:
-            # Expect state shape (batch, seq_len, features)
-            if state.ndim == 2:
-                state = state.unsqueeze(1) # Add sequence dimension if missing for single step inference
-            x, next_hidden_state = self.rnn(state, hidden_state)
-            # Use the output of the last time step if sequence, or the only time step if single step
-            x = x[:, -1, :]
+            # RNN processing (input is already normalized basic state sequence)
+            rnn_output, next_hidden_state = self.rnn(network_input, hidden_state)
+            # Use the output corresponding to the last time step
+            mlp_input = rnn_output[:, -1, :] # Shape: (batch, rnn_hidden_size)
         else:
-            # Expect state shape (batch, features)
-            x = state
-            next_hidden_state = None
+            # MLP input is the normalized last basic state
+            mlp_input = network_input # Shape: (batch, state_dim)
 
+        x = mlp_input
         for layer in self.layers:
-            x = F.relu(layer(x))
+            x = layer(x)
 
         mean = self.mean(x)
         log_std = self.log_std(x)
@@ -135,453 +151,424 @@ class Actor(nn.Module):
 
         return mean, log_std, next_hidden_state
 
-    def sample(self, state: torch.Tensor, hidden_state: Optional[Tuple[torch.Tensor, torch.Tensor]] = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
-        """Sample action from the policy distribution, handling RNN."""
-        mean, log_std, next_hidden_state = self.forward(state, hidden_state)
+    def sample(self, network_input: torch.Tensor, hidden_state: Optional[Tuple] = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[Tuple]]:
+        """Sample action (normalized) from the policy distribution."""
+        mean, log_std, next_hidden_state = self.forward(network_input, hidden_state)
         std = log_std.exp()
         normal = Normal(mean, std)
 
         x_t = normal.rsample()
-        action = torch.tanh(x_t)
+        action_normalized = torch.tanh(x_t)
 
-        log_prob = normal.log_prob(x_t) - torch.log(1 - action.pow(2) + 1e-6)
+        # Log prob with tanh correction (safer calculation)
+        log_prob_unbounded = normal.log_prob(x_t)
+        clamped_tanh = action_normalized.clamp(-0.999999, 0.999999) # Avoid log(0)
+        log_det_jacobian = torch.log(1.0 - clamped_tanh.pow(2) + 1e-7) # Add epsilon
+        log_prob = log_prob_unbounded - log_det_jacobian
         log_prob = log_prob.sum(1, keepdim=True)
 
-        return action, log_prob, torch.tanh(mean), next_hidden_state
+        return action_normalized, log_prob, torch.tanh(mean), next_hidden_state
 
-    def get_initial_hidden_state(self, batch_size: int, device: torch.device) -> Optional[Tuple[torch.Tensor, torch.Tensor]]:
+    def get_initial_hidden_state(self, batch_size: int, device: torch.device) -> Optional[Tuple]:
         """Return initial hidden state for RNN."""
-        if not self.use_rnn:
-            return None
-        if self.rnn_type == 'lstm':
-            return (torch.zeros(self.rnn_num_layers, batch_size, self.rnn_hidden_size).to(device),
-                    torch.zeros(self.rnn_num_layers, batch_size, self.rnn_hidden_size).to(device))
-        elif self.rnn_type == 'gru':
-            # GRU only has one hidden state tensor
-            return torch.zeros(self.rnn_num_layers, batch_size, self.rnn_hidden_size).to(device)
-
+        if not self.use_rnn: return None
+        h_zeros = torch.zeros(self.rnn_num_layers, batch_size, self.rnn_hidden_size).to(device)
+        if self.config.rnn_type == 'lstm':
+            c_zeros = torch.zeros(self.rnn_num_layers, batch_size, self.rnn_hidden_size).to(device)
+            return (h_zeros, c_zeros)
+        elif self.config.rnn_type == 'gru':
+            return h_zeros
+        return None
 
 class Critic(nn.Module):
     """Q-function network (Critic) for SAC, optionally with RNN."""
 
-    def __init__(self, config: SACConfig):
+    def __init__(self, config: SACConfig, world_config: WorldConfig):
         super(Critic, self).__init__()
+        self.config = config
+        self.world_config = world_config
         self.use_rnn = config.use_rnn
-        self.rnn_hidden_size = config.rnn_hidden_size
-        self.rnn_num_layers = config.rnn_num_layers
-        self.rnn_type = config.rnn_type
-
-        rnn_input_dim = config.state_dim # RNN takes only state
-        mlp_input_dim = config.state_dim + config.action_dim # Default MLP input
+        self.state_dim = config.state_dim
+        self.action_dim = config.action_dim
+        self.trajectory_length = world_config.trajectory_length
 
         if self.use_rnn:
-            rnn_cell = nn.LSTM if self.rnn_type == 'lstm' else nn.GRU
+            self.rnn_hidden_size = config.rnn_hidden_size
+            self.rnn_num_layers = config.rnn_num_layers
+            rnn_input_dim = self.state_dim # RNN processes normalized basic states
+            rnn_cell = nn.LSTM if config.rnn_type == 'lstm' else nn.GRU
+
             self.rnn1 = rnn_cell(input_size=rnn_input_dim, hidden_size=config.rnn_hidden_size,
                                   num_layers=config.rnn_num_layers, batch_first=True)
             self.rnn2 = rnn_cell(input_size=rnn_input_dim, hidden_size=config.rnn_hidden_size,
                                   num_layers=config.rnn_num_layers, batch_first=True)
-            mlp_input_dim = config.rnn_hidden_size + config.action_dim # MLP uses RNN output + action
+            mlp_input_dim = config.rnn_hidden_size + self.action_dim # MLP takes final RNN state + action
         else:
-             self.rnn1, self.rnn2 = None, None # Explicitly set to None if not used
+            # MLP uses only the normalized last basic state + action
+            mlp_input_dim = self.state_dim + self.action_dim
+            self.rnn1, self.rnn2 = None, None
 
         # Q1 architecture
         self.q1_layers = nn.ModuleList()
         q1_mlp_input = mlp_input_dim
         for hidden_dim in config.hidden_dims:
             self.q1_layers.append(nn.Linear(q1_mlp_input, hidden_dim))
+            self.q1_layers.append(nn.ReLU())
             q1_mlp_input = hidden_dim
-        self.q1_out = nn.Linear(config.hidden_dims[-1], 1)
+        self.q1_out = nn.Linear(q1_mlp_input, 1)
 
         # Q2 architecture
         self.q2_layers = nn.ModuleList()
         q2_mlp_input = mlp_input_dim
         for hidden_dim in config.hidden_dims:
             self.q2_layers.append(nn.Linear(q2_mlp_input, hidden_dim))
+            self.q2_layers.append(nn.ReLU())
             q2_mlp_input = hidden_dim
-        self.q2_out = nn.Linear(config.hidden_dims[-1], 1)
+        self.q2_out = nn.Linear(q2_mlp_input, 1)
 
-    def forward(self, state: torch.Tensor, action: torch.Tensor, hidden_state: Optional[Tuple] = None) -> Tuple[torch.Tensor, torch.Tensor, Optional[Tuple]]:
-        """Forward pass returning both Q-values, handling RNN if enabled."""
+    def forward(self, network_input: torch.Tensor, action: torch.Tensor, hidden_state: Optional[Tuple] = None) -> Tuple[torch.Tensor, torch.Tensor, Optional[Tuple]]:
+        """Forward pass returning both Q-values.
+           Expects pre-normalized basic state(s).
+           network_input shape:
+             - RNN: (batch, seq_len, state_dim) - normalized basic state sequence
+             - MLP: (batch, state_dim) - normalized last basic state
+           action shape: (batch, action_dim)
+        """
+        next_hidden_state = None
         if self.use_rnn:
-             # Expect state shape (batch, seq_len, features), action (batch, seq_len, action_dim)
-            if state.ndim == 2: state = state.unsqueeze(1)
-            if action.ndim == 2: action = action.unsqueeze(1)
-
             h1_in, h2_in = None, None
-            if hidden_state is not None:
-                h1_in, h2_in = hidden_state # Unpack tuple of hidden states for Q1/Q2 RNNs
+            if isinstance(hidden_state, tuple) and len(hidden_state) == 2:
+                 h1_in, h2_in = hidden_state
 
-            rnn_out1, next_h1 = self.rnn1(state, h1_in)
-            rnn_out2, next_h2 = self.rnn2(state, h2_in)
+            # RNN processing (input is already normalized basic state sequence)
+            rnn_out1, next_h1 = self.rnn1(network_input, h1_in)
+            rnn_out2, next_h2 = self.rnn2(network_input, h2_in)
             next_hidden_state = (next_h1, next_h2)
 
-            # Use the output of the last time step if sequence
-            rnn_out1 = rnn_out1[:, -1, :]
-            rnn_out2 = rnn_out2[:, -1, :]
-            # Action corresponds to the last time step
-            action_last_step = action[:, -1, :]
-
-            x1 = torch.cat([rnn_out1, action_last_step], 1)
-            x2 = torch.cat([rnn_out2, action_last_step], 1)
+            # Use final RNN hidden state and concatenate with action
+            mlp_input1 = torch.cat([rnn_out1[:, -1, :], action], dim=1)
+            mlp_input2 = torch.cat([rnn_out2[:, -1, :], action], dim=1)
         else:
-            # Expect state (batch, features), action (batch, action_dim)
-            sa = torch.cat([state, action], 1)
-            x1 = sa
-            x2 = sa
-            next_hidden_state = None
+            # Use normalized last basic state and concatenate with action
+            # network_input is shape (batch, state_dim) here
+            mlp_input1 = torch.cat([network_input, action], dim=1)
+            mlp_input2 = torch.cat([network_input, action], dim=1)
 
-
+        # Q1 calculation
+        x1 = mlp_input1
         for layer in self.q1_layers:
-            x1 = F.relu(layer(x1))
+            x1 = layer(x1)
         q1 = self.q1_out(x1)
 
+        # Q2 calculation
+        x2 = mlp_input2
         for layer in self.q2_layers:
-            x2 = F.relu(layer(x2))
+            x2 = layer(x2)
         q2 = self.q2_out(x2)
 
         return q1, q2, next_hidden_state
 
-    def q1_forward(self, state: torch.Tensor, action: torch.Tensor, hidden_state: Optional[Tuple] = None) -> Tuple[torch.Tensor, Optional[Tuple]]:
-        """Forward pass returning only Q1 value, handling RNN if enabled."""
+    def q1_forward(self, network_input: torch.Tensor, action: torch.Tensor, hidden_state: Optional[Tuple] = None) -> Tuple[torch.Tensor, Optional[Tuple]]:
+        """ Forward pass for Q1 only. """
+        # Simplified, only showing MLP case adjustment
+        # Similar logic applies for RNN case as in full forward
+        next_hidden_state = None
         if self.use_rnn:
-            if state.ndim == 2: state = state.unsqueeze(1)
-            if action.ndim == 2: action = action.unsqueeze(1)
-
-            h1_in = None
-            if hidden_state is not None: h1_in = hidden_state # Q1 uses first element if tuple passed
-
-            rnn_out1, next_h1 = self.rnn1(state, h1_in)
-            next_hidden_state = next_h1
-            rnn_out1 = rnn_out1[:, -1, :]
-            action_last_step = action[:, -1, :]
-            x1 = torch.cat([rnn_out1, action_last_step], 1)
+            h1_in = hidden_state[0] if isinstance(hidden_state, tuple) else hidden_state
+            rnn_out1, next_h1 = self.rnn1(network_input, h1_in)
+            next_hidden_state = (next_h1, None) # Return only Q1's hidden state progression
+            mlp_input1 = torch.cat([rnn_out1[:, -1, :], action], dim=1)
         else:
-            sa = torch.cat([state, action], 1)
-            x1 = sa
-            next_hidden_state = None
+            mlp_input1 = torch.cat([network_input, action], dim=1)
 
+        x1 = mlp_input1
         for layer in self.q1_layers:
-            x1 = F.relu(layer(x1))
+            x1 = layer(x1)
         q1 = self.q1_out(x1)
         return q1, next_hidden_state
 
     def get_initial_hidden_state(self, batch_size: int, device: torch.device) -> Optional[Tuple]:
-         """Return initial hidden state tuple (h1, h2) for RNNs."""
-         if not self.use_rnn:
-             return None
-         if self.rnn_type == 'lstm':
-             h1 = (torch.zeros(self.rnn_num_layers, batch_size, self.rnn_hidden_size).to(device),
-                    torch.zeros(self.rnn_num_layers, batch_size, self.rnn_hidden_size).to(device))
-             h2 = (torch.zeros(self.rnn_num_layers, batch_size, self.rnn_hidden_size).to(device),
-                   torch.zeros(self.rnn_num_layers, batch_size, self.rnn_hidden_size).to(device))
-             return (h1, h2)
-         elif self.rnn_type == 'gru':
-             h1 = torch.zeros(self.rnn_num_layers, batch_size, self.rnn_hidden_size).to(device)
-             h2 = torch.zeros(self.rnn_num_layers, batch_size, self.rnn_hidden_size).to(device)
-             return (h1, h2)
+        """Return initial hidden state tuple (h1, h2) for RNNs."""
+        if not self.use_rnn: return None
+        h_zeros = lambda: torch.zeros(self.rnn_num_layers, batch_size, self.rnn_hidden_size).to(device)
+        if self.config.rnn_type == 'lstm':
+            c_zeros = lambda: torch.zeros(self.rnn_num_layers, batch_size, self.rnn_hidden_size).to(device)
+            h1 = (h_zeros(), c_zeros())
+            h2 = (h_zeros(), c_zeros())
+            return (h1, h2)
+        elif self.config.rnn_type == 'gru':
+            h1 = h_zeros()
+            h2 = h_zeros()
+            return (h1, h2)
+        return None
 
 
 class SAC:
-    """Soft Actor-Critic algorithm implementation, optionally with RNN."""
+    """Soft Actor-Critic algorithm implementation with trajectory states and normalization."""
 
-    def __init__(self, config: SACConfig, device: torch.device = None):
+    def __init__(self, config: SACConfig, world_config: WorldConfig, device: torch.device = None):
         self.config = config
+        self.world_config = world_config # Need world config for trajectory info
         self.gamma = config.gamma
         self.tau = config.tau
         self.alpha = config.alpha
-        self.action_scale = config.action_scale
         self.auto_tune_alpha = config.auto_tune_alpha
         self.use_rnn = config.use_rnn
-        # sequence_length is 1 if RNN is not used
-        self.sequence_length = config.sequence_length if self.use_rnn else 1
+        self.trajectory_length = world_config.trajectory_length
+        self.state_dim = config.state_dim # Basic state dim
+        self.action_dim = config.action_dim
 
         if device is None:
-            self.device = torch.device(
-                "cuda" if torch.cuda.is_available() else "cpu")
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:
             self.device = device
         print(f"SAC Agent using device: {self.device}")
         if self.use_rnn:
-            print(f"SAC Agent using RNN: Type={config.rnn_type}, Hidden={config.rnn_hidden_size}, Layers={config.rnn_num_layers}, SeqLen={self.sequence_length}")
+             print(f"SAC Agent using RNN: Type={config.rnn_type}, Hidden={config.rnn_hidden_size}, Layers={config.rnn_num_layers}, SeqLen={self.trajectory_length}")
+        else:
+             print(f"SAC Agent using MLP (Processing last state of {self.trajectory_length}-step trajectory)")
 
-        self.actor = Actor(config).to(self.device)
-        self.critic = Critic(config).to(self.device)
-        self.critic_target = Critic(config).to(self.device)
+        # --- Normalization ---
+        self.state_normalizer = RunningMeanStd(shape=(self.state_dim,)).to(self.device)
+        print(f"SAC Agent state normalization enabled for dim: {self.state_dim}")
 
-        for target_param, param in zip(self.critic_target.parameters(), self.critic.parameters()):
-            target_param.data.copy_(param.data)
+        self.actor = Actor(config, world_config).to(self.device)
+        self.critic = Critic(config, world_config).to(self.device)
+        self.critic_target = Critic(config, world_config).to(self.device)
+
+        self.critic_target.load_state_dict(self.critic.state_dict())
+        for target_param in self.critic_target.parameters():
             target_param.requires_grad = False
 
-        self.actor_optimizer = optim.Adam(
-            self.actor.parameters(), lr=config.lr)
-        self.critic_optimizer = optim.Adam(
-            self.critic.parameters(), lr=config.lr)
+        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=config.lr)
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=config.lr)
 
         if self.auto_tune_alpha:
-            self.target_entropy = - \
-                torch.prod(torch.Tensor(
-                    [config.action_dim]).to(self.device)).item()
-            self.log_alpha = torch.zeros(
-                1, requires_grad=True, device=self.device)
+            self.target_entropy = -torch.prod(torch.Tensor([self.action_dim]).to(self.device)).item()
+            self.log_alpha = torch.tensor(np.log(self.alpha), requires_grad=True, device=self.device)
             self.alpha_optimizer = optim.Adam([self.log_alpha], lr=config.lr)
+        else:
+            self.log_alpha = torch.tensor(np.log(self.alpha)).to(self.device) # Keep as tensor
 
-    def select_action(self, state: dict, actor_hidden_state: Optional[Tuple] = None, evaluate: bool = False) -> Tuple[np.ndarray, Optional[Tuple]]:
-        """Select action based on state and current actor hidden state."""
-        state_tuple = state['basic_state']
-        state_tensor = torch.FloatTensor(state_tuple).to(self.device).unsqueeze(0) # Shape (1, state_dim)
+    def select_action(self, state: dict, actor_hidden_state: Optional[Tuple] = None, evaluate: bool = False) -> Tuple[float, Optional[Tuple]]:
+        """Select action (normalized yaw change [-1, 1]) based on normalized state."""
+        state_trajectory = state['full_trajectory'] # Get the trajectory array
+        state_tensor_full = torch.FloatTensor(state_trajectory).to(self.device).unsqueeze(0) # Add batch dim (1, N, feat_dim)
 
         with torch.no_grad():
+            # --- Normalize Input State(s) ---
+            if self.use_rnn:
+                raw_basic_state_seq = state_tensor_full[:, :, :self.state_dim] # (1, N, state_dim)
+                normalized_basic_state_seq = self.state_normalizer.normalize(raw_basic_state_seq)
+                actor_input = normalized_basic_state_seq
+            else:
+                raw_last_basic_state = state_tensor_full[:, -1, :self.state_dim] # (1, state_dim)
+                normalized_last_basic_state = self.state_normalizer.normalize(raw_last_basic_state)
+                actor_input = normalized_last_basic_state
+            # --- End Normalize ---
+
             if evaluate:
-                _, _, action_mean_squashed, next_actor_hidden_state = self.actor.sample(state_tensor, actor_hidden_state)
+                # Pass normalized state(s) to actor
+                _, _, action_mean_squashed, next_actor_hidden_state = self.actor.sample(actor_input, actor_hidden_state)
                 action_normalized = action_mean_squashed
             else:
-                action_normalized, _, _, next_actor_hidden_state = self.actor.sample(state_tensor, actor_hidden_state)
+                # Pass normalized state(s) to actor
+                action_normalized, _, _, next_actor_hidden_state = self.actor.sample(actor_input, actor_hidden_state)
 
-        action_scaled = action_normalized.detach().cpu().numpy()[0] * self.action_scale
-        return action_scaled, next_actor_hidden_state
+        action_normalized_float = action_normalized.detach().cpu().numpy()[0, 0]
+        return action_normalized_float, next_actor_hidden_state
 
     def update_parameters(self, memory: ReplayBuffer, batch_size: int):
-        """Perform a single SAC update step using a batch from memory."""
-        # Ensure enough samples for the batch (considering sequence length)
-        if len(memory) < batch_size * self.sequence_length:
-            return None
+        """Perform a single SAC update step using a batch of trajectories with normalization."""
+        sampled_batch = memory.sample(batch_size)
+        if sampled_batch is None: return None
 
-        # Sample sequences or transitions based on use_rnn
-        # sequence_length will be 1 if self.use_rnn is False
-        state_batch, action_batch_scaled, reward_batch, next_state_batch, done_batch = memory.sample(
-            batch_size, self.sequence_length)
+        # Shapes: state/next_state (b, N, feat_dim), action (b, 1), reward/done (b,)
+        state_batch, action_batch_normalized, reward_batch, next_state_batch, done_batch = sampled_batch
 
-        # Move batch to device
-        state_batch = torch.FloatTensor(state_batch).to(self.device)
-        action_batch_normalized = torch.FloatTensor(action_batch_scaled / self.action_scale).to(self.device)
-        reward_batch = torch.FloatTensor(reward_batch).to(self.device)
-        next_state_batch = torch.FloatTensor(next_state_batch).to(self.device)
-        done_batch = torch.FloatTensor(done_batch).to(self.device)
+        state_batch_tensor = torch.FloatTensor(state_batch).to(self.device)
+        next_state_batch_tensor = torch.FloatTensor(next_state_batch).to(self.device)
+        action_batch_tensor = torch.FloatTensor(action_batch_normalized).to(self.device)
+        reward_batch_tensor = torch.FloatTensor(reward_batch).to(self.device).unsqueeze(1)
+        done_batch_tensor = torch.FloatTensor(done_batch).to(self.device).unsqueeze(1)
 
-        # --- Prepare inputs and initial hidden states ---
-        initial_actor_hidden = None
-        initial_critic_hidden = None
-        initial_critic_target_hidden = None
+        # --- Update Running State Statistics ---
+        # Use all basic states from the current trajectories in the batch
+        raw_basic_states_batch = state_batch_tensor[:, :, :self.state_dim] # (batch, N, state_dim)
+        self.state_normalizer.update(raw_basic_states_batch.reshape(-1, self.state_dim))
+        # --- End Update ---
 
+        # --- Prepare Normalized Network Inputs ---
         if self.use_rnn:
-            # Data shape: (batch, seq_len, dim)
-            # Target calculation needs last reward/done: (batch, 1)
-            reward_target = reward_batch[:, -1].unsqueeze(-1)
-            done_target = done_batch[:, -1].unsqueeze(-1)
-            # Get initial hidden states
-            initial_actor_hidden = self.actor.get_initial_hidden_state(batch_size, self.device)
-            initial_critic_hidden = self.critic.get_initial_hidden_state(batch_size, self.device)
-            initial_critic_target_hidden = self.critic_target.get_initial_hidden_state(batch_size, self.device)
+            # Normalize the sequence of basic states
+            batch, seq_len, _ = raw_basic_states_batch.shape
+            normalized_state_seq = self.state_normalizer.normalize(
+                raw_basic_states_batch.reshape(-1, self.state_dim)
+            ).reshape(batch, seq_len, self.state_dim)
+
+            raw_next_basic_state_seq = next_state_batch_tensor[:, :, :self.state_dim]
+            batch_next, seq_len_next, _ = raw_next_basic_state_seq.shape
+            normalized_next_state_seq = self.state_normalizer.normalize(
+                 raw_next_basic_state_seq.reshape(-1, self.state_dim)
+            ).reshape(batch_next, seq_len_next, self.state_dim)
+
+            # Network inputs are the normalized sequences
+            current_network_input = normalized_state_seq
+            next_network_input = normalized_next_state_seq
         else:
-            # Data shape: (batch, dim)
-            # Target calculation needs unsqueezed reward/done: (batch, 1)
-            reward_target = reward_batch.unsqueeze(1)
-            done_target = done_batch.unsqueeze(1)
-            # No hidden states needed
+            # Normalize only the last basic state
+            raw_last_basic_state = raw_basic_states_batch[:, -1, :] # (batch, state_dim)
+            normalized_last_basic_state = self.state_normalizer.normalize(raw_last_basic_state)
+
+            raw_next_last_basic_state = next_state_batch_tensor[:, -1, :self.state_dim] # (batch, state_dim)
+            normalized_next_last_basic_state = self.state_normalizer.normalize(raw_next_last_basic_state)
+
+            # Network inputs are the normalized last states
+            current_network_input = normalized_last_basic_state
+            next_network_input = normalized_next_last_basic_state
+        # --- End Prepare ---
+
+        # Get initial hidden states for RNNs if used (no change needed)
+        initial_actor_hidden = self.actor.get_initial_hidden_state(batch_size, self.device) if self.use_rnn else None
+        initial_critic_hidden = self.critic.get_initial_hidden_state(batch_size, self.device) if self.use_rnn else None
+        initial_critic_target_hidden = self.critic_target.get_initial_hidden_state(batch_size, self.device) if self.use_rnn else None
 
         # --- Critic Update ---
         with torch.no_grad():
-            if self.use_rnn:
-                 # --- RNN Target Calculation ---
-                 next_actions_normalized_seq, next_log_probs_seq = [], []
-                 current_actor_hidden = initial_actor_hidden
-                 for t in range(self.sequence_length):
-                     next_action_t, next_log_prob_t, _, current_actor_hidden = self.actor.sample(
-                         next_state_batch[:, t, :], current_actor_hidden
-                     )
-                     next_actions_normalized_seq.append(next_action_t)
-                     next_log_probs_seq.append(next_log_prob_t)
-                 # Note: We only need the last step's results for Bellman target
-                 next_action_last = next_actions_normalized_seq[-1]
-                 next_log_prob_last = next_log_probs_seq[-1]
+            # Pass normalized next state(s) to actor
+            next_action, next_log_prob, _, _ = self.actor.sample(next_network_input, initial_actor_hidden)
 
-                 # Pass the whole sequence to target critic
-                 # We need the hidden state from processing the sequence up to the second-to-last step
-                 # to get the Q value corresponding to the *last* state transition.
-                 target_q1_seq, target_q2_seq = [], []
-                 current_critic_target_hidden = initial_critic_target_hidden
-                 for t in range(self.sequence_length):
-                      target_q1_t, target_q2_t, current_critic_target_hidden = self.critic_target(
-                          next_state_batch[:, t, :],
-                          torch.stack(next_actions_normalized_seq, dim=1)[:, t, :], # Pass corresponding action
-                          current_critic_target_hidden
-                      )
-                      target_q1_seq.append(target_q1_t)
-                      target_q2_seq.append(target_q2_t)
+            # Pass normalized next state(s) to target critic
+            target_q1, target_q2, _ = self.critic_target(next_network_input, next_action, initial_critic_target_hidden)
+            target_q_min = torch.min(target_q1, target_q2)
 
-                 # Use Q-value from the *last* time step for Bellman target
-                 target_q1_last = target_q1_seq[-1]
-                 target_q2_last = target_q2_seq[-1]
-                 target_q_min = torch.min(target_q1_last, target_q2_last)
-            else:
-                 # --- MLP Target Calculation ---
-                 next_action_normalized, next_log_prob, _, _ = self.actor.sample(next_state_batch) # No hidden state
-                 target_q1, target_q2, _ = self.critic_target(next_state_batch, next_action_normalized) # No hidden state
-                 target_q_min = torch.min(target_q1, target_q2)
-                 next_log_prob_last = next_log_prob # Only one step
-
-            # Calculate Bellman target 'y'
-            target_q_entropy = target_q_min - self.alpha * next_log_prob_last
-            y = reward_target + (1 - done_target) * self.gamma * target_q_entropy
+            current_alpha = self.log_alpha.exp().item()
+            target_q_entropy = target_q_min - current_alpha * next_log_prob
+            y = reward_batch_tensor + (1.0 - done_batch_tensor) * self.gamma * target_q_entropy
 
         # --- Calculate Current Q values ---
-        if self.use_rnn:
-             # --- RNN Current Q Calculation ---
-             # Pass the whole sequence to the critic
-             current_q1_seq, current_q2_seq = [], []
-             current_critic_hidden_prop = initial_critic_hidden
-             for t in range(self.sequence_length):
-                 q1_t, q2_t, current_critic_hidden_prop = self.critic(
-                     state_batch[:, t, :], action_batch_normalized[:, t, :], current_critic_hidden_prop
-                 )
-                 current_q1_seq.append(q1_t)
-                 current_q2_seq.append(q2_t)
+        # Pass normalized current state(s) and actual action taken to critic
+        current_q1, current_q2, _ = self.critic(current_network_input, action_batch_tensor, initial_critic_hidden)
 
-             # Use Q-value from the last time step for loss calculation
-             current_q1_last = current_q1_seq[-1]
-             current_q2_last = current_q2_seq[-1]
-        else:
-            # --- MLP Current Q Calculation ---
-            current_q1, current_q2, _ = self.critic(state_batch, action_batch_normalized) # No hidden state
-            current_q1_last = current_q1
-            current_q2_last = current_q2
+        critic_loss = F.mse_loss(current_q1, y) + F.mse_loss(current_q2, y)
 
-        # Calculate Critic Loss using Q values corresponding to the target 'y'
-        critic_loss = F.mse_loss(current_q1_last, y) + F.mse_loss(current_q2_last, y)
-
-        # Optimize Critic
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
         self.critic_optimizer.step()
 
         # --- Actor Update ---
-        # Freeze critic parameters
-        for param in self.critic.parameters():
-            param.requires_grad = False
+        for param in self.critic.parameters(): param.requires_grad = False
 
-        if self.use_rnn:
-             # --- RNN Actor Update ---
-             # Propagate actor over sequence to get actions and log_probs
-             action_pi_normalized_seq, log_prob_pi_seq = [], []
-             current_actor_hidden_update = initial_actor_hidden # Use fresh initial hidden state
-             for t in range(self.sequence_length):
-                 action_t, log_prob_t, _, current_actor_hidden_update = self.actor.sample(
-                      state_batch[:, t, :], current_actor_hidden_update
-                 )
-                 action_pi_normalized_seq.append(action_t)
-                 log_prob_pi_seq.append(log_prob_t)
-             # Need last step's log_prob for loss and alpha update
-             log_prob_pi_last = log_prob_pi_seq[-1]
+        # Pass normalized current state(s) to actor
+        action_pi, log_prob_pi, _, _ = self.actor.sample(current_network_input, initial_actor_hidden)
+        # Pass normalized current state(s) and policy action to critic
+        q1_pi, q2_pi, _ = self.critic(current_network_input, action_pi, initial_critic_hidden)
+        q_pi_min = torch.min(q1_pi, q2_pi)
 
-             # Propagate critic over sequence with *new* actor actions
-             q1_pi_seq, q2_pi_seq = [], []
-             current_critic_hidden_actor_update = initial_critic_hidden # Use fresh initial hidden state
-             for t in range(self.sequence_length):
-                 q1_pi_t, q2_pi_t, current_critic_hidden_actor_update = self.critic(
-                     state_batch[:, t, :].detach(), # Detach state batch
-                     action_pi_normalized_seq[t], # Use action from actor pass
-                     current_critic_hidden_actor_update
-                 )
-                 q1_pi_seq.append(q1_pi_t)
-                 q2_pi_seq.append(q2_pi_t)
-             # Use last step's Q value for actor loss
-             q1_pi_last = q1_pi_seq[-1]
-             q2_pi_last = q2_pi_seq[-1]
-             q_pi_min = torch.min(q1_pi_last, q2_pi_last)
+        current_alpha = self.log_alpha.exp().item()
+        actor_loss = (current_alpha * log_prob_pi - q_pi_min).mean()
 
-        else:
-            # --- MLP Actor Update ---
-            action_pi_normalized, log_prob_pi, _, _ = self.actor.sample(state_batch) # No hidden state
-            q1_pi, q2_pi, _ = self.critic(state_batch, action_pi_normalized) # No hidden state
-            q_pi_min = torch.min(q1_pi, q2_pi)
-            log_prob_pi_last = log_prob_pi # Only one step
-
-        # Calculate Actor loss
-        actor_loss = (self.alpha * log_prob_pi_last - q_pi_min).mean()
-
-        # Optimize Actor
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
         self.actor_optimizer.step()
 
-        # Unfreeze critic parameters
-        for param in self.critic.parameters():
-            param.requires_grad = True
+        for param in self.critic.parameters(): param.requires_grad = True
 
         # --- Alpha Update ---
+        alpha_loss_item = None
         if self.auto_tune_alpha:
-            # Use log_prob from the last time step (detached)
-            alpha_loss = -(self.log_alpha * (log_prob_pi_last.detach() + self.target_entropy)).mean()
+            alpha_loss = -(self.log_alpha * (log_prob_pi.detach() + self.target_entropy)).mean()
             self.alpha_optimizer.zero_grad()
             alpha_loss.backward()
             self.alpha_optimizer.step()
             self.alpha = self.log_alpha.exp().item()
+            alpha_loss_item = alpha_loss.item()
 
-        # --- Target Network Update ---
+        # --- Target Network Update (Soft Update) ---
         for target_param, param in zip(self.critic_target.parameters(), self.critic.parameters()):
-            target_param.data.copy_(
-                target_param.data * (1.0 - self.tau) + param.data * self.tau)
+            target_param.data.copy_(target_param.data * (1.0 - self.tau) + param.data * self.tau)
 
         return {
             'critic_loss': critic_loss.item(),
             'actor_loss': actor_loss.item(),
-            'alpha': self.alpha
+            'alpha': self.alpha,
+            'alpha_loss': alpha_loss_item if alpha_loss_item is not None else 0.0
         }
 
     def save_model(self, path: str):
-        print(f"Saving model to {path}...")
+        print(f"Saving SAC model to {path}...")
         save_dict = {
             'actor_state_dict': self.actor.state_dict(),
             'critic_state_dict': self.critic.state_dict(),
             'critic_target_state_dict': self.critic_target.state_dict(),
             'actor_optimizer_state_dict': self.actor_optimizer.state_dict(),
             'critic_optimizer_state_dict': self.critic_optimizer.state_dict(),
+            'state_normalizer_state_dict': self.state_normalizer.state_dict(), # Save normalizer state
             'device_type': self.device.type
         }
         if self.auto_tune_alpha:
-            save_dict['log_alpha_state_dict'] = self.log_alpha
+            save_dict['log_alpha'] = self.log_alpha # Save tensor directly
             save_dict['alpha_optimizer_state_dict'] = self.alpha_optimizer.state_dict()
         torch.save(save_dict, path)
 
     def load_model(self, path: str):
         if not os.path.exists(path):
-            print(
-                f"Warning: Model file not found at {path}. Skipping loading.")
+            print(f"Warning: SAC model file not found at {path}. Skipping loading.")
             return
-        print(f"Loading model from {path}...")
+        print(f"Loading SAC model from {path}...")
         checkpoint = torch.load(path, map_location=self.device)
 
         self.actor.load_state_dict(checkpoint['actor_state_dict'])
         self.critic.load_state_dict(checkpoint['critic_state_dict'])
-        self.critic_target.load_state_dict(
-            checkpoint['critic_target_state_dict'])
-        self.actor_optimizer.load_state_dict(
-            checkpoint['actor_optimizer_state_dict'])
-        self.critic_optimizer.load_state_dict(
-            checkpoint['critic_optimizer_state_dict'])
+        # Target load handled below after main critic load
+        self.actor_optimizer.load_state_dict(checkpoint['actor_optimizer_state_dict'])
+        self.critic_optimizer.load_state_dict(checkpoint['critic_optimizer_state_dict'])
 
-        if self.auto_tune_alpha and 'log_alpha_state_dict' in checkpoint:
-            # Ensure log_alpha is loaded correctly and requires grad
-            self.log_alpha = checkpoint['log_alpha_state_dict'].to(self.device)
-            if not self.log_alpha.requires_grad:
-                 self.log_alpha.requires_grad_(True)
-            # Re-initialize alpha optimizer with the potentially new log_alpha parameter
+        # --- Load Normalizer State ---
+        if 'state_normalizer_state_dict' in checkpoint:
+            self.state_normalizer.load_state_dict(checkpoint['state_normalizer_state_dict'])
+            print("Loaded state normalizer statistics.")
+        else:
+            print("Warning: State normalizer statistics not found in checkpoint. Using initial values.")
+        # --- End Load Normalizer ---
+
+        if self.auto_tune_alpha and 'log_alpha' in checkpoint:
+            self.log_alpha = checkpoint['log_alpha'].to(self.device)
+            if not self.log_alpha.requires_grad: self.log_alpha.requires_grad_(True)
             self.alpha_optimizer = optim.Adam([self.log_alpha], lr=self.config.lr)
-            try: # Add try-except block for robustness if optimizer state is incompatible
+            try:
                 self.alpha_optimizer.load_state_dict(checkpoint['alpha_optimizer_state_dict'])
             except ValueError as e:
-                 print(f"Warning: Could not load alpha optimizer state, possibly due to parameter mismatch. Reinitializing alpha optimizer. Error: {e}")
-                 self.alpha_optimizer = optim.Adam([self.log_alpha], lr=self.config.lr) # Reinitialize if loading fails
-
+                 print(f"Warning: Could not load SAC alpha optimizer state: {e}. Reinitializing.")
+                 self.alpha_optimizer = optim.Adam([self.log_alpha], lr=self.config.lr)
             self.alpha = self.log_alpha.exp().item()
+        elif not self.auto_tune_alpha:
+             # Load fixed alpha value if present, otherwise keep config default
+             if 'log_alpha' in checkpoint:
+                  try:
+                       loaded_log_alpha = checkpoint['log_alpha'].to(self.device)
+                       self.log_alpha = loaded_log_alpha
+                       self.alpha = self.log_alpha.exp().item()
+                  except Exception as e:
+                       print(f"Warning: Could not load fixed log_alpha: {e}. Keeping config value.")
+             else:
+                  self.alpha = self.log_alpha.exp().item() # Update alpha based on potentially loaded fixed log_alpha
 
-        for target_param, param in zip(self.critic_target.parameters(), self.critic.parameters()):
-            target_param.data.copy_(param.data)
+
+        self.critic_target.load_state_dict(self.critic.state_dict()) # Sync target AFTER loading main critic
+        for target_param in self.critic_target.parameters():
             target_param.requires_grad = False
-        print(f"Model loaded successfully from {path}")
+
+        self.actor.train()
+        self.critic.train()
+        self.critic_target.train() # Set target to train mode, though grads are off
+
+        print(f"SAC model loaded successfully from {path}")
 
 
-def train_sac(config: DefaultConfig, use_multi_gpu: bool = False):
+# --- Training Loop (train_sac) ---
+# (No significant changes needed here, but relies on the agent handling normalization internally)
+def train_sac(config: DefaultConfig, use_multi_gpu: bool = False, run_evaluation: bool = True):
     sac_config = config.sac
     train_config = config.training
     buffer_config = config.replay_buffer
@@ -595,143 +582,158 @@ def train_sac(config: DefaultConfig, use_multi_gpu: bool = False):
     log_frequency_ep = train_config.log_frequency
     save_interval_ep = train_config.save_interval
 
-    total_steps = 0
-
-    log_dir = os.path.join("runs", f"sac_training_{int(time.time())}")
-    os.makedirs(log_dir, exist_ok=True)
-    writer = SummaryWriter(log_dir=log_dir)
-    print(f"TensorBoard logs will be saved to: {log_dir}")
-
+    # Device Setup
     if torch.cuda.is_available():
         if use_multi_gpu and torch.cuda.device_count() > 1:
-            print(f"Using {torch.cuda.device_count()} GPUs for training (Note: SAC updates are often sequential)")
-            device = torch.device("cuda")
+            print(f"Warning: Multi-GPU not standard for SAC. Using single specified/default GPU: {cuda_device}")
+            device = torch.device(cuda_device)
         else:
             device = torch.device(cuda_device)
-            print(f"Using device: {device}")
-            if 'cuda' in cuda_device and not cuda_device == 'cuda':
-                try:
-                    device_idx = int(cuda_device.split(':')[1])
-                    if 0 <= device_idx < torch.cuda.device_count():
-                         print(f"GPU: {torch.cuda.get_device_name(device_idx)}")
-                except (IndexError, ValueError):
-                     print(f"Warning: Invalid CUDA device string '{cuda_device}'. Using default CUDA device.")
-                     device = torch.device("cuda:0")
+        print(f"Using device: {device}")
+        if 'cuda' in cuda_device:
+            try: torch.cuda.set_device(device); print(f"GPU: {torch.cuda.get_device_name(device)}")
+            except Exception as e: print(f"Warn: Could not set CUDA device {cuda_device}. E: {e}"); device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     else:
-        device = torch.device("cpu")
-        print("GPU not available, using CPU for training")
+        device = torch.device("cpu"); print("GPU not available, using CPU.")
 
-    agent = SAC(config=sac_config, device=device)
-    memory = ReplayBuffer(config=buffer_config)
+    # --- Initialization ---
+    name_in_logdir = "sac_norm_rnn_" if config.sac.use_rnn else "sac_norm_"
+    log_dir = os.path.join("runs", name_in_logdir + str(int(time.time())))
+    os.makedirs(log_dir, exist_ok=True)
+    writer = SummaryWriter(log_dir=log_dir)
+    print(f"TensorBoard logs: {log_dir}")
 
+    agent = SAC(config=sac_config, world_config=world_config, device=device)
+    memory = ReplayBuffer(config=buffer_config, world_config=world_config)
     os.makedirs(train_config.models_dir, exist_ok=True)
 
+    # --- Load Checkpoint ---
+    model_files = [f for f in os.listdir(train_config.models_dir) if f.startswith("sac_") and f.endswith(".pt")]
+    latest_model_path = None
+    if model_files:
+        try: latest_model_path = max([os.path.join(train_config.models_dir, f) for f in model_files], key=os.path.getmtime)
+        except Exception as e: print(f"Could not find latest model: {e}")
+
+    total_steps = 0
+    start_episode = 1
+    if latest_model_path and os.path.exists(latest_model_path):
+        print(f"\nResuming training from: {latest_model_path}")
+        agent.load_model(latest_model_path)
+        try:
+            parts = os.path.basename(latest_model_path).split('_')
+            ep_part = next((p for p in parts if p.startswith('ep')), None)
+            step_part = next((p for p in parts if p.startswith('step')), None)
+            if ep_part: start_episode = int(ep_part.replace('ep', '')) + 1
+            if step_part: total_steps = int(step_part.replace('step', '').split('.')[0])
+            print(f"Resuming at step {total_steps}, episode {start_episode}")
+        except (IndexError, ValueError, StopIteration) as e:
+             print(f"Warning: Could not parse steps/episode from filename ({latest_model_path}): {e}. Starting counts from 0/1.")
+             total_steps = 0; start_episode = 1
+    else:
+        print("\nStarting training from scratch.")
+
+    # --- Training Loop ---
     episode_rewards = []
-    all_losses = {'critic_loss': [], 'actor_loss': [], 'alpha': []}
+    all_losses = {'critic_loss': [], 'actor_loss': [], 'alpha': [], 'alpha_loss': []}
+    timing_metrics = { 'env_step_time': deque(maxlen=100), 'parameter_update_time': deque(maxlen=100) }
 
-    timing_metrics = {
-        'env_step_time': [],
-        'parameter_update_time': []
-    }
+    pbar = tqdm(range(start_episode, train_config.num_episodes + 1),
+                desc="Training SAC", unit="episode", initial=start_episode-1, total=train_config.num_episodes)
 
-    pbar = tqdm(range(1, train_config.num_episodes + 1),
-                desc="Training", unit="episode")
+    world = World(world_config=world_config)
 
     for episode in pbar:
-        env = World(world_config=world_config)
-        state = env.encode_state()
+        world.reset()
+        state = world.encode_state()
         episode_reward = 0
         episode_steps = 0
-
-        # Initialize actor hidden state at the start of the episode if using RNN
         actor_hidden_state = agent.actor.get_initial_hidden_state(batch_size=1, device=device) if agent.use_rnn else None
-
-        episode_step_times = []
-        episode_param_update_times = []
-        episode_losses = {'critic_loss': [], 'actor_loss': [], 'alpha': []}
+        episode_losses_temp = {'critic_loss': [], 'actor_loss': [], 'alpha': [], 'alpha_loss': []}
+        updates_made_this_episode = 0
 
         for step_in_episode in range(train_config.max_steps):
-            action_scaled, next_actor_hidden_state = agent.select_action(state, actor_hidden_state=actor_hidden_state, evaluate=False)
-            action_obj = Velocity(x=action_scaled[0], y=action_scaled[1], z=0.0)
+            # Agent selects action based on potentially normalized state
+            action_normalized, next_actor_hidden_state = agent.select_action(
+                state, actor_hidden_state=actor_hidden_state, evaluate=False
+            )
 
             step_start_time = time.time()
-            env.step(action_obj, training=True, terminal_step=step_in_episode==train_config.max_steps-1)
+            world.step(action_normalized, training=True, terminal_step=(step_in_episode == train_config.max_steps - 1))
             step_time = time.time() - step_start_time
-            episode_step_times.append(step_time)
+            timing_metrics['env_step_time'].append(step_time)
 
-            reward = env.reward
-            next_state = env.encode_state()
-            done = env.done
+            reward = world.reward
+            next_state = world.encode_state()
+            done = world.done
 
-            memory.push(state['basic_state'], action_scaled, reward, next_state['basic_state'], done)
+            memory.push(state, action_normalized, reward, next_state, done)
 
             state = next_state
-            # Update actor hidden state for the next step only if using RNN
-            if agent.use_rnn:
-                actor_hidden_state = next_actor_hidden_state
-                # Reset hidden state if episode ended (done=True)
-                # The reset actually happens at the start of the *next* episode's loop
-                # If done is True here, the hidden state is passed one last time,
-                # but won't be used to start the next step in *this* episode.
-                # For training updates using sequences ending in 'done', the target calculation handles it.
-
+            if agent.use_rnn: actor_hidden_state = next_actor_hidden_state
             episode_reward += reward
             episode_steps += 1
             total_steps += 1
 
-            # Perform Updates Here
+            # Perform Updates
             if total_steps >= learning_starts and total_steps % train_freq == 0:
                 for _ in range(gradient_steps):
-                     # Check buffer size condition based on sequence length
-                    if len(memory) >= batch_size * agent.sequence_length:
+                    if len(memory) >= batch_size:
                         update_start_time = time.time()
-                        losses = agent.update_parameters(memory, batch_size)
+                        losses = agent.update_parameters(memory, batch_size) # Agent handles normalization internally
                         update_time = time.time() - update_start_time
-                        episode_param_update_times.append(update_time)
-
                         if losses:
-                            episode_losses['critic_loss'].append(losses['critic_loss'])
-                            episode_losses['actor_loss'].append(losses['actor_loss'])
-                            episode_losses['alpha'].append(losses['alpha'])
-
+                            timing_metrics['parameter_update_time'].append(update_time)
+                            # Use np.float64 for NumPy 2.0 compatibility
+                            if not any(np.isnan(v) for v in losses.values() if isinstance(v, (float, np.float64))):
+                                for key, val in losses.items():
+                                     if isinstance(val, (float, np.float64)):
+                                        episode_losses_temp[key].append(val)
+                                updates_made_this_episode += 1
+                            else:
+                                print("INFO: Skipping loss logging due to NaN in update results.")
+                        else:
+                            break
+                    else:
+                        break
             if done:
-                break # End episode
+                break
 
-        # --- Logging and Reporting (End of Episode) ---
+        # --- Logging (End of Episode) ---
         episode_rewards.append(episode_reward)
+        avg_losses = {k: np.mean(v) if v else 0 for k, v in episode_losses_temp.items()}
+        if updates_made_this_episode > 0 :
+             if not np.isnan(avg_losses['critic_loss']): all_losses['critic_loss'].append(avg_losses['critic_loss'])
+             if not np.isnan(avg_losses['actor_loss']): all_losses['actor_loss'].append(avg_losses['actor_loss'])
+             if not np.isnan(avg_losses['alpha']): all_losses['alpha'].append(avg_losses['alpha'])
+             if not np.isnan(avg_losses['alpha_loss']): all_losses['alpha_loss'].append(avg_losses['alpha_loss'])
 
-        avg_losses = {k: np.mean(v) if v else 0 for k, v in episode_losses.items()}
-        updates_made_this_episode = any(v for v in episode_losses.values() if len(v) > 0) # Check if any lists are non-empty
-        if updates_made_this_episode:
-             all_losses['critic_loss'].append(avg_losses['critic_loss'])
-             all_losses['actor_loss'].append(avg_losses['actor_loss'])
-             all_losses['alpha'].append(avg_losses['alpha'])
 
         if episode % log_frequency_ep == 0:
-            if episode_step_times:
-                avg_step_time = np.mean(episode_step_times)
-                timing_metrics['env_step_time'].append(avg_step_time)
-                writer.add_scalar('Time/Environment_Step_ms', avg_step_time * 1000, total_steps)
-
-            if episode_param_update_times:
-                avg_param_update_time = np.mean(episode_param_update_times)
-                timing_metrics['parameter_update_time'].append(avg_param_update_time)
-                writer.add_scalar('Time/Parameter_Update_ms', avg_param_update_time * 1000, total_steps)
-            elif total_steps >= learning_starts:
-                 writer.add_scalar('Time/Parameter_Update_ms', 0, total_steps)
+            if timing_metrics['env_step_time']: writer.add_scalar('Time/Environment_Step_ms_Avg100', np.mean(timing_metrics['env_step_time']) * 1000, total_steps)
+            if timing_metrics['parameter_update_time']: writer.add_scalar('Time/Parameter_Update_ms_Avg100', np.mean(timing_metrics['parameter_update_time']) * 1000, total_steps)
+            elif total_steps >= learning_starts: writer.add_scalar('Time/Parameter_Update_ms_Avg100', 0, total_steps)
 
             writer.add_scalar('Reward/Episode', episode_reward, total_steps)
             writer.add_scalar('Steps/Episode', episode_steps, total_steps)
             writer.add_scalar('Progress/Total_Steps', total_steps, episode)
-            writer.add_scalar('Error/Distance_EndEpisode', env.error_dist, total_steps)
-            # Ensure pf_update_time exists and is a number before logging
-            if hasattr(env, 'pf_update_time') and isinstance(env.pf_update_time, (int, float)):
-                 writer.add_scalar('Time/Estimator_Update_ms', env.pf_update_time * 1000, total_steps)
+            writer.add_scalar('Progress/Buffer_Size', len(memory), total_steps)
+            writer.add_scalar('Error/Distance_EndEpisode', world.error_dist, total_steps)
 
-            if updates_made_this_episode:
-                writer.add_scalar('Loss/Critic_AvgEp', avg_losses['critic_loss'], total_steps)
-                writer.add_scalar('Loss/Actor_AvgEp', avg_losses['actor_loss'], total_steps)
-                writer.add_scalar('Alpha/Value', avg_losses['alpha'], total_steps)
+            if updates_made_this_episode > 0:
+                if not np.isnan(avg_losses['critic_loss']): writer.add_scalar('Loss/Critic_AvgEp', avg_losses['critic_loss'], total_steps)
+                if not np.isnan(avg_losses['actor_loss']): writer.add_scalar('Loss/Actor_AvgEp', avg_losses['actor_loss'], total_steps)
+                if not np.isnan(avg_losses['alpha']): writer.add_scalar('Alpha/Value_AvgEp', avg_losses['alpha'], total_steps)
+                if agent.auto_tune_alpha and not np.isnan(avg_losses['alpha_loss']): writer.add_scalar('Loss/Alpha_AvgEp', avg_losses['alpha_loss'], total_steps)
+            else:
+                writer.add_scalar('Alpha/Value_AvgEp', agent.alpha, total_steps)
+
+            # Log normalizer stats (optional, good for debugging)
+            if agent.state_normalizer.count > agent.state_normalizer.epsilon: # Avoid logging initial values
+                writer.add_scalar('Stats/Normalizer_Count', agent.state_normalizer.count.item(), total_steps)
+                # Log mean/std of first state feature for simplicity
+                writer.add_scalar('Stats/Normalizer_Mean_Feat0', agent.state_normalizer.mean[0].item(), total_steps)
+                writer.add_scalar('Stats/Normalizer_Std_Feat0', torch.sqrt(agent.state_normalizer.var[0].clamp(min=0.0)).item(), total_steps)
+
 
             lookback = min(100, len(episode_rewards))
             avg_reward_100 = np.mean(episode_rewards[-lookback:]) if episode_rewards else 0
@@ -740,32 +742,41 @@ def train_sac(config: DefaultConfig, use_multi_gpu: bool = False):
         if episode % 10 == 0:
             lookback = min(10, len(episode_rewards))
             avg_reward_10 = np.mean(episode_rewards[-lookback:]) if episode_rewards else 0
-            pbar_postfix = {'avg_rew_10': f'{avg_reward_10:.2f}', 'steps': total_steps}
-            if updates_made_this_episode:
-                pbar_postfix['crit_loss'] = f"{avg_losses['critic_loss']:.3f}"
-                pbar_postfix['act_loss'] = f"{avg_losses['actor_loss']:.3f}"
-                pbar_postfix['alpha'] = f"{avg_losses['alpha']:.3f}"
+            pbar_postfix = {'avg_rew_10': f'{avg_reward_10:.2f}', 'steps': total_steps, 'alpha': f"{agent.alpha:.3f}"}
+            if updates_made_this_episode and not np.isnan(avg_losses['critic_loss']): pbar_postfix['crit_loss'] = f"{avg_losses['critic_loss']:.2f}"
             pbar.set_postfix(pbar_postfix)
 
         if episode % save_interval_ep == 0:
-            save_path = os.path.join(
-                train_config.models_dir, f"sac_ep{episode}_step{total_steps}.pt")
+            save_path = os.path.join(train_config.models_dir, f"sac_ep{episode}_step{total_steps}.pt")
             agent.save_model(save_path)
 
     pbar.close()
     writer.close()
     print(f"Training finished. Total steps: {total_steps}")
-    final_save_path = os.path.join(
-        train_config.models_dir, f"sac_final_ep{train_config.num_episodes}_step{total_steps}.pt")
+    final_save_path = os.path.join(train_config.models_dir, f"sac_final_ep{train_config.num_episodes}_step{total_steps}.pt")
     agent.save_model(final_save_path)
+
+    if run_evaluation:
+         print("\nStarting evaluation after training...")
+         evaluate_sac(agent=agent, config=config) # Pass full config
 
     return agent, episode_rewards
 
-
+# --- Evaluation Loop (evaluate_sac) ---
+# (This function now needs to handle setting the normalizer to eval mode or avoiding updates)
 def evaluate_sac(agent: SAC, config: DefaultConfig):
     eval_config = config.evaluation
     world_config = config.world
     vis_config = config.visualization
+
+    if eval_config.render:
+        try:
+            from visualization import visualize_world, reset_trajectories, save_gif
+            import imageio.v2 as imageio
+            vis_available = True; print("Visualization enabled.")
+        except ImportError:
+            print("Visualization libraries not found. Rendering disabled."); vis_available = False; eval_config.render = False
+    else: vis_available = False; print("Rendering disabled by config.")
 
     eval_rewards = []
     success_count = 0
@@ -773,117 +784,91 @@ def evaluate_sac(agent: SAC, config: DefaultConfig):
 
     agent.actor.eval()
     agent.critic.eval()
+    agent.state_normalizer.eval() # *** Set normalizer to eval mode ***
 
-    print(f"\nRunning Evaluation for {eval_config.num_episodes} episodes...")
+    print(f"\nRunning SAC Evaluation for {eval_config.num_episodes} episodes...")
+    world = World(world_config=world_config)
+
     for episode in range(eval_config.num_episodes):
-        env = World(world_config=world_config)
-        state = env.encode_state()
+        world.reset()
+        state = world.encode_state()
         episode_reward = 0
         episode_frames = []
-
-        # Initialize actor hidden state for evaluation if using RNN
         actor_hidden_state = agent.actor.get_initial_hidden_state(batch_size=1, device=agent.device) if agent.use_rnn else None
 
-        if eval_config.render:
+        if eval_config.render and vis_available:
             os.makedirs(vis_config.save_dir, exist_ok=True)
             reset_trajectories()
             try:
-                initial_frame_file = visualize_world(
-                    world=env,
-                    vis_config=vis_config,
-                    filename=f"eval_ep{episode+1}_frame_000_initial.png",
-                    collect_for_gif=True
-                )
-                if initial_frame_file:
-                    episode_frames.append(initial_frame_file)
-            except Exception as e:
-                print(f"Warning: Visualization failed for initial state. Error: {e}")
+                fname = f"sac_eval_ep{episode+1}_frame_000_initial.png"
+                initial_frame_file = visualize_world(world, vis_config=vis_config, filename=fname, collect_for_gif=True)
+                if initial_frame_file and os.path.exists(initial_frame_file): episode_frames.append(initial_frame_file)
+            except Exception as e: print(f"Warn: Vis failed init state ep {episode+1}. E: {e}")
 
         for step in range(eval_config.max_steps):
-            action_scaled, next_actor_hidden_state = agent.select_action(state, actor_hidden_state=actor_hidden_state, evaluate=True)
-            action_obj = Velocity(x=action_scaled[0], y=action_scaled[1], z=0.0)
-            env.step(action_obj, training=False)
-            reward = env.reward
-            next_state = env.encode_state()
-            done = env.done
+            # select_action uses normalizer in normalize mode (doesn't update stats)
+            action_normalized, next_actor_hidden_state = agent.select_action(
+                state, actor_hidden_state=actor_hidden_state, evaluate=True
+            )
 
-            if eval_config.render:
+            world.step(action_normalized, training=False, terminal_step=(step == eval_config.max_steps - 1))
+            reward = world.reward
+            next_state = world.encode_state()
+            done = world.done
+
+            if eval_config.render and vis_available:
                 try:
-                    frame_file = visualize_world(
-                        world=env,
-                        vis_config=vis_config,
-                        filename=f"eval_ep{episode+1}_frame_{step+1:03d}.png",
-                        collect_for_gif=True
-                    )
-                    if frame_file:
-                        episode_frames.append(frame_file)
-                except Exception as e:
-                     print(f"Warning: Visualization failed for step {step+1}. Error: {e}")
+                    fname = f"sac_eval_ep{episode+1}_frame_{step+1:03d}.png"
+                    frame_file = visualize_world(world, vis_config=vis_config, filename=fname, collect_for_gif=True)
+                    if frame_file and os.path.exists(frame_file): episode_frames.append(frame_file)
+                except Exception as e: print(f"Warn: Vis failed step {step+1} ep {episode+1}. E: {e}")
 
             state = next_state
-            # Update actor hidden state for the next evaluation step
-            if agent.use_rnn:
-                actor_hidden_state = next_actor_hidden_state
-                if done: # Reset hidden state if episode finished
-                     actor_hidden_state = agent.actor.get_initial_hidden_state(batch_size=1, device=agent.device)
-
+            if agent.use_rnn: actor_hidden_state = next_actor_hidden_state
             episode_reward += reward
-
             if done:
-                if env.error_dist <= world_config.success_threshold:
-                    success_count += 1
-                    print(
-                        f"  Episode {episode+1}: Success! Found landmark at step {step+1} (Error: {env.error_dist:.2f} <= threshold {world_config.success_threshold})")
-                else:
-                    print(
-                        f"  Episode {episode+1}: Terminated early at step {step+1} (Not success). Final Error: {env.error_dist:.2f}"
-                    )
                 break
 
-        if not done:
-            print(
-                f"  Episode {episode+1}: Finished (Max steps {eval_config.max_steps} reached). Final Error: {env.error_dist:.2f}")
+        success = world.error_dist <= world_config.success_threshold
+        status = "Success!" if success else "Failure."
+        if done:
+            if success: success_count += 1
+            print(f"  Episode {episode+1}: Terminated Step {step+1}. Final Err: {world.error_dist:.2f}. {status}")
+        else: # Max steps reached
+             if success: success_count +=1
+             print(f"  Episode {episode+1}: Finished (Max steps {eval_config.max_steps}). Final Err: {world.error_dist:.2f}. {status}")
 
         eval_rewards.append(episode_reward)
         print(f"  Episode {episode+1}: Total Reward: {episode_reward:.2f}")
 
-        if eval_config.render and episode_frames:
-            gif_filename = f"eval_episode_{episode+1}.gif"
+        if eval_config.render and vis_available and episode_frames:
+            gif_filename = f"sac_eval_episode_{episode+1}.gif"
             try:
-                gif_path = save_gif(
-                    output_filename=gif_filename,
-                    vis_config=vis_config,
-                    frame_paths=episode_frames,
-                    delete_frames=vis_config.delete_frames_after_gif
-                )
-                if gif_path:
-                    all_episode_gif_paths.append(gif_path)
-            except Exception as e:
-                print(f"Warning: Failed to create or save GIF for episode {episode+1}. Error: {e}")
-                if vis_config.delete_frames_after_gif:
-                    for frame in episode_frames:
-                        if os.path.exists(frame):
-                            try:
-                                os.remove(frame)
-                            except OSError:
-                                pass
+                print(f"  Saving GIF for episode {episode+1} with {len(episode_frames)} frames...")
+                gif_path = save_gif(output_filename=gif_filename, vis_config=vis_config, frame_paths=episode_frames, delete_frames=vis_config.delete_frames_after_gif)
+                if gif_path: all_episode_gif_paths.append(gif_path)
+            except Exception as e: print(f"  Warn: Failed GIF save ep {episode+1}. E: {e}")
+            if vis_config.delete_frames_after_gif:
+                 cleaned_count = 0
+                 for frame in episode_frames:
+                     if os.path.exists(frame):
+                         try: os.remove(frame); cleaned_count += 1
+                         except OSError as ose: print(f"    Warn: Could not delete SAC frame file {frame}: {ose}")
 
-
-    agent.actor.train()
+    agent.actor.train() # Set back to train mode
     agent.critic.train()
+    agent.state_normalizer.train() # *** Set normalizer back to train mode ***
 
     avg_eval_reward = np.mean(eval_rewards) if eval_rewards else 0
-    success_rate = success_count / \
-        eval_config.num_episodes if eval_config.num_episodes > 0 else 0
-    print("\n--- Evaluation Summary ---")
-    print(f"Average Evaluation Reward: {avg_eval_reward:.2f}")
-    print(
-        f"Success Rate (reaching threshold): {success_rate:.2f} ({success_count}/{eval_config.num_episodes})")
-    if eval_config.render and all_episode_gif_paths:
-        print(
-            f"Individual episode GIFs saved in the '{os.path.abspath(vis_config.save_dir)}' directory.")
-    elif eval_config.render:
-         print("Rendering was enabled, but no GIFs were successfully created.")
-    print("--- End Evaluation ---")
+    std_eval_reward = np.std(eval_rewards) if eval_rewards else 0
+    success_rate = success_count / eval_config.num_episodes if eval_config.num_episodes > 0 else 0
+    print("\n--- SAC Evaluation Summary ---")
+    print(f"Episodes: {eval_config.num_episodes}")
+    print(f"Average Reward: {avg_eval_reward:.2f} +/- {std_eval_reward:.2f}")
+    print(f"Success Rate (Error <= {world_config.success_threshold}): {success_rate:.2%} ({success_count}/{eval_config.num_episodes})")
+    if eval_config.render and vis_available and all_episode_gif_paths: print(f"GIFs saved to: '{os.path.abspath(vis_config.save_dir)}'")
+    elif eval_config.render and not vis_available: print("Rendering enabled but libs not found.")
+    elif not eval_config.render: print("Rendering disabled.")
+    print("--- End SAC Evaluation ---\n")
 
-    return eval_rewards
+    return eval_rewards, success_rate
