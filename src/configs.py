@@ -14,7 +14,9 @@ class SACConfig(BaseModel):
     hidden_dims: List[int] = Field([64, 64], description="List of hidden layer dimensions for MLP part")
     log_std_min: int = Field(-20, description="Minimum log std for action distribution")
     log_std_max: int = Field(1, description="Maximum log std for action distribution")
-    lr: float = Field(5e-5, description="Learning rate")
+    actor_lr: float = Field(5e-5, description="Learning rate for the actor network")
+    critic_lr: float = Field(5e-5, description="Learning rate for the critic network")
+    alpha_lr: float = Field(5e-5, description="Learning rate for the alpha temperature parameter (if auto-tuning)")
     gamma: float = Field(0.99, description="Discount factor")
     tau: float = Field(0.005, description="Target network update rate")
     alpha: float = Field(0.2, description="Temperature parameter (Initial value if auto-tuning)")
@@ -24,13 +26,20 @@ class SACConfig(BaseModel):
     rnn_hidden_size: int = Field(128, description="Hidden size of RNN layers (Only used if use_rnn is True)")
     rnn_num_layers: int = Field(1, description="Number of RNN layers (Only used if use_rnn is True)")
 
+    # --- Prioritized Experience Replay (PER) settings ---
+    use_per: bool = Field(False, description="Whether to use Prioritized Experience Replay")
+    per_alpha: float = Field(0.6, description="PER: Alpha exponent for priority calculation (0=uniform, 1=full priority)")
+    per_beta_start: float = Field(0.4, description="PER: Initial beta for importance sampling correction")
+    per_beta_end: float = Field(1.0, description="PER: Final beta for importance sampling correction (annealed to this value)")
+    per_beta_anneal_steps: int = Field(100000, description="PER: Number of agent steps to anneal beta from start to end")
+    per_epsilon: float = Field(1e-5, description="PER: Small constant added to priorities to ensure non-zero probability")
+
 
 class PPOConfig(BaseModel):
     """Configuration for the PPO agent"""
-    state_dim: int = Field(CORE_STATE_DIM, description="Dimension of the basic state tuple (PPO uses the last state of trajectory)")
+    state_dim: int = Field(CORE_STATE_DIM, description="Dimension of the basic state tuple (PPO uses the last state of trajectory if not RNN)")
     action_dim: int = Field(CORE_ACTION_DIM, description="Action dimension (yaw_change)")
-    # action_scale: float = Field(math.pi / 4, description="Maximum magnitude of yaw change action") # See note in SACConfig
-    hidden_dim: int = Field(256, description="Hidden layer dimension")
+    hidden_dim: int = Field(256, description="Hidden layer dimension for MLP part")
     log_std_min: int = Field(-20, description="Minimum log std for action distribution")
     log_std_max: int = Field(1, description="Maximum log std for action distribution")
     actor_lr: float = Field(5e-6, description="Actor learning rate")
@@ -41,11 +50,21 @@ class PPOConfig(BaseModel):
     n_epochs: int = Field(3, description="Number of optimization epochs per update")
     entropy_coef: float = Field(0.015, description="Entropy coefficient for exploration")
     value_coef: float = Field(0.5, description="Value loss coefficient")
-    batch_size: int = Field(1024, description="Batch size for training")
-    steps_per_update: int = Field(8192, description="Environment steps between PPO updates")
+    batch_size: int = Field(64, description="Batch size for training (number of sequences per batch if RNN, or transitions if MLP)") # Adjusted for RNN
+    steps_per_update: int = Field(2048, description="Environment steps between PPO updates (rollout length for recurrent PPO)") # Typically one full rollout
+
+    # --- RNN settings for PPO ---
+    use_rnn: bool = Field(False, description="Whether to use RNN layers in Actor/Critic")
+    rnn_type: Literal['lstm', 'gru'] = Field('lstm', description="Type of RNN cell (Only used if use_rnn is True)")
+    rnn_hidden_size: int = Field(128, description="Hidden size of RNN layers (Only used if use_rnn is True)")
+    rnn_num_layers: int = Field(1, description="Number of RNN layers (Only used if use_rnn is True)")
+    # For recurrent PPO, max_seq_len_in_batch might be useful if optimizing memory for batches,
+    # but usually derived from steps_per_update or actual rollout lengths.
+    # rollout_buffer_size: int = Field(10, description="Number of full rollouts to store before an update (if steps_per_update is one rollout)")
+
 
 class ReplayBufferConfig(BaseModel):
-    """Configuration for the replay buffer"""
+    """Configuration for the replay buffer (SAC specific)"""
     capacity: int = Field(1000000, description="Maximum capacity of replay buffer (stores full trajectories)")
     gamma: float = Field(0.99, description="Discount factor for returns")
 
@@ -53,14 +72,15 @@ class TrainingConfig(BaseModel):
     """Configuration for training"""
     num_episodes: int = Field(30000, description="Number of episodes to train")
     max_steps: int = Field(300, description="Maximum steps per episode")
-    batch_size: int = Field(32, description="Batch size for training (Number of trajectories sampled)")
+    # batch_size for SAC is in SACConfig, PPO uses its own ppo_config.batch_size
+    sac_batch_size: int = Field(32, description="Batch size for SAC training (Number of trajectories sampled)") 
     save_interval: int = Field(1000, description="Interval (in episodes) for saving models")
     log_frequency: int = Field(10, description="Frequency (in episodes) for logging to TensorBoard")
     models_dir: str = Field("models/default_models/", description="Default directory if experiment structure fails or for old scripts (less used now)")
     experiment_base_dir: str = Field("experiments", description="Base directory for saving all experiment data (logs, models, config)")
-    learning_starts: int = Field(8000, description="Number of steps to collect before starting training updates")
-    train_freq: int = Field(30, description="Update the policy every n environment steps")
-    gradient_steps: int = Field(20, description="How many gradient steps to perform when training frequency is met")
+    learning_starts: int = Field(8000, description="Number of steps to collect before starting training updates (SAC)")
+    train_freq: int = Field(30, description="Update the policy every n environment steps (SAC)")
+    gradient_steps: int = Field(20, description="How many gradient steps to perform when training frequency is met (SAC)")
     normalize_rewards: bool = Field(True, description="Whether to normalize rewards using running mean/std (agent-side)")
 
 
@@ -150,18 +170,17 @@ class WorldConfig(BaseModel):
     randomize_landmark_initial_location: bool = Field(True, description="Randomize landmark initial location?")
     randomize_landmark_initial_velocity: bool = Field(False, description="Randomize landmark initial velocity?")
 
-    # Use world_x/y_bounds for agent/landmark randomization if specific ranges are not needed, or keep these for finer control
     agent_randomization_ranges: RandomizationRange = Field(default_factory=lambda: RandomizationRange(x_range=(-100.0,100.0), y_range=(-100.0,100.0), depth_range=(0.0, 0.0)), description="Ranges for agent location randomization")
     landmark_randomization_ranges: RandomizationRange = Field(default_factory=lambda: RandomizationRange(x_range=(-100.0,100.0), y_range=(-100.0,100.0), depth_range=(0.0,300.0)), description="Ranges for landmark location randomization")
     landmark_velocity_randomization_ranges: VelocityRandomizationRange = Field(default_factory=VelocityRandomizationRange, description="Ranges for landmark velocity randomization")
 
     # --- State Representation ---
-    trajectory_length: int = Field(10, description="Number of steps (N) included in the trajectory state")
+    trajectory_length: int = Field(10, description="Number of steps (N) included in the trajectory state for fixed-history SAC/PPO-MLP. PPO-RNN uses full rollouts.")
     trajectory_feature_dim: int = Field(CORE_STATE_DIM + CORE_ACTION_DIM + TRAJECTORY_REWARD_DIM, description="Dimension of features per step in trajectory state (basic_state + prev_action + prev_reward)") # 8+1+1=10
 
     # --- Observations & Noise ---
-    range_measurement_base_noise: float = Field(0, description="Base standard deviation of range measurement noise")
-    range_measurement_distance_factor: float = Field(0, description="Factor by which range noise std dev increases with distance")
+    range_measurement_base_noise: float = Field(0.01, description="Base standard deviation of range measurement noise")
+    range_measurement_distance_factor: float = Field(0.001, description="Factor by which range noise std dev increases with distance")
 
     # --- Termination Conditions ---
     success_threshold: float = Field(0.5, description="Estimation error (2D distance) below which the episode is considered successful")
@@ -191,7 +210,7 @@ class DefaultConfig(BaseModel):
     """Default configuration for the entire application"""
     sac: SACConfig = Field(default_factory=SACConfig, description="SAC agent configuration")
     ppo: PPOConfig = Field(default_factory=PPOConfig, description="PPO agent configuration")
-    replay_buffer: ReplayBufferConfig = Field(default_factory=ReplayBufferConfig, description="Replay buffer configuration")
+    replay_buffer: ReplayBufferConfig = Field(default_factory=ReplayBufferConfig, description="Replay buffer configuration (SAC)")
     training: TrainingConfig = Field(default_factory=TrainingConfig, description="Training configuration")
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig, description="Evaluation configuration")
     world: WorldConfig = Field(default_factory=WorldConfig, description="World configuration")
@@ -208,10 +227,6 @@ class DefaultConfig(BaseModel):
         self._update_models_dir_per_algo()
 
     def _sync_dependent_configs(self):
-        # Ensure randomization ranges are within world bounds if they are used as primary definition
-        # Or, ensure world_bounds are wide enough to encompass randomization_ranges
-        # For now, assume they are set independently, but a check could be added.
-        # Example: Make randomization ranges default to world_bounds if not specified otherwise.
         if self.world.agent_randomization_ranges.x_range[0] < self.world.world_x_bounds[0] or \
            self.world.agent_randomization_ranges.x_range[1] > self.world.world_x_bounds[1]:
             print(f"Warning: Agent X randomization range {self.world.agent_randomization_ranges.x_range} may exceed world X bounds {self.world.world_x_bounds}. Clamping randomization to bounds.")
@@ -219,7 +234,6 @@ class DefaultConfig(BaseModel):
                 max(self.world.agent_randomization_ranges.x_range[0], self.world.world_x_bounds[0]),
                 min(self.world.agent_randomization_ranges.x_range[1], self.world.world_x_bounds[1])
             )
-        # Similar checks for Y and landmark ranges.
         if self.world.agent_randomization_ranges.y_range[0] < self.world.world_y_bounds[0] or \
            self.world.agent_randomization_ranges.y_range[1] > self.world.world_y_bounds[1]:
             print(f"Warning: Agent Y randomization range {self.world.agent_randomization_ranges.y_range} may exceed world Y bounds {self.world.world_y_bounds}. Clamping randomization to bounds.")
@@ -228,7 +242,6 @@ class DefaultConfig(BaseModel):
                 min(self.world.agent_randomization_ranges.y_range[1], self.world.world_y_bounds[1])
             )
         
-        # Ensure landmark depth randomization is within landmark_depth_bounds for normalization
         if self.world.landmark_randomization_ranges.depth_range[0] < self.world.landmark_depth_bounds[0] or \
            self.world.landmark_randomization_ranges.depth_range[1] > self.world.landmark_depth_bounds[1]:
             print(f"Warning: Landmark depth randomization range {self.world.landmark_randomization_ranges.depth_range} may exceed landmark depth bounds {self.world.landmark_depth_bounds}. Clamping randomization to bounds.")
@@ -262,15 +275,27 @@ default_config = DefaultConfig()
 sac_rnn_config = DefaultConfig(algorithm="sac")
 sac_rnn_config.sac.use_rnn = True
 
-ppo_config_obj = DefaultConfig(algorithm="ppo") # Renamed from ppo_config to avoid conflict with PPOConfig class
+sac_per_config = DefaultConfig(algorithm="sac") 
+sac_per_config.sac.use_per = True
+
+ppo_config_obj = DefaultConfig(algorithm="ppo")
+
+ppo_rnn_config = DefaultConfig(algorithm="ppo") 
+ppo_rnn_config.ppo.use_rnn = True
+# For recurrent PPO, steps_per_update is essentially the rollout length.
+# batch_size for PPO is the number of such rollouts processed in one update.
+ppo_rnn_config.ppo.steps_per_update = 256 # Example: Shorter rollouts for RNN PPO
+ppo_rnn_config.ppo.batch_size = 16        # Example: 16 rollouts per update batch
 
 # Re-run post_init for all predefined configs to apply updates
-for cfg_instance in [default_config, sac_rnn_config, ppo_config_obj]:
+for cfg_instance in [default_config, sac_rnn_config, sac_per_config, ppo_config_obj, ppo_rnn_config]:
     cfg_instance.model_post_init(None)
 
 
 CONFIGS: Dict[str, DefaultConfig] = {
-    "default": default_config,
+    "default": default_config, 
     "sac_rnn": sac_rnn_config,
-    "ppo": ppo_config_obj,
+    "sac_per": sac_per_config, 
+    "ppo": ppo_config_obj,     
+    "ppo_rnn": ppo_rnn_config, 
 }
