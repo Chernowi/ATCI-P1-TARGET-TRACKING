@@ -1,5 +1,3 @@
-# In least_squares.py
-
 from typing import Optional, List, Dict, Any, Tuple
 import numpy as np
 import warnings

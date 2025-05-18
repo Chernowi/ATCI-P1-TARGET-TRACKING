@@ -47,7 +47,8 @@ class RunningMeanStd(nn.Module):
         # Ensure normalization happens with the same dtype as input or float32
         original_dtype = x.dtype
         mean = self.mean.to(original_dtype)
-        std = torch.sqrt(self.var + self.epsilon).to(original_dtype)
+        # Add epsilon to var before sqrt to prevent sqrt(0) and division by zero
+        std = torch.sqrt(self.var.to(original_dtype) + self.epsilon) # Use epsilon here
         return (x - mean) / std
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

@@ -18,6 +18,8 @@ _landmark_trajectory = []
 def visualize_world(world, vis_config: VisualizationConfig, filename=None, show_trajectories=True, collect_for_gif=True):
     """
     Visualize the world state in 2D (top-down view) and save it to a file.
+    The filename will be saved inside vis_config.save_dir.
+    If vis_config.save_dir is relative, it's assumed to be relative to CWD or an experiment dir.
 
     Args:
         world (World): The World object to visualize.
@@ -44,9 +46,12 @@ def visualize_world(world, vis_config: VisualizationConfig, filename=None, show_
     if len(_landmark_trajectory) > max_trajectory_points:
         _landmark_trajectory = _landmark_trajectory[-max_trajectory_points:]
 
-    save_dir = vis_config.save_dir
+    # Use vis_config.save_dir directly. If it's relative, os.makedirs and os.path.join will handle it.
+    # If it needs to be relative to an experiment path, the caller (e.g., evaluate_*) should modify
+    # vis_config.save_dir to be an absolute path or a path relative to the experiment dir *before* calling this.
+    save_dir = vis_config.save_dir 
     try:
-        if not os.path.exists(save_dir):
+        if not os.path.exists(save_dir): # save_dir is now potentially absolute or specific relative
             os.makedirs(save_dir)
     except OSError as e:
         print(f"Error creating visualization directory {save_dir}: {e}")
@@ -109,21 +114,23 @@ def visualize_world(world, vis_config: VisualizationConfig, filename=None, show_
                     print(f"Warning: Could not plot covariance ellipse - {e}")
     else:
         if world.agent and world.agent.location:
-            ax.text(0.5, 0.02, "PF not initialized", ha='center',
+            ax.text(0.5, 0.02, "Estimator not initialized", ha='center',
                     transform=ax.transAxes, color='orange', fontsize=10)
+
 
     ax.set_xlabel('X')
     ax.set_ylabel('Y')
     title_info = f"Reward: {world.reward:.4f}, Err: {world.error_dist:.2f}"
     if filename:
         try:
-            step_part = filename.split('_')[-1].split('.')[0]
-            if step_part.isdigit():
-                title_info = f"Step: {int(step_part)}, " + title_info
-            elif "initial" in filename:
+            step_part = filename.split('_')[-1].split('.')[0] # More robust split
+            if "initial" in filename: # Check before isdigit for filenames like "frame_000_initial.png"
                 title_info = "Step: 0, " + title_info
-        except IndexError:
+            elif step_part.isdigit():
+                 title_info = f"Step: {int(step_part)}, " + title_info
+        except (IndexError, ValueError): # Catch if split fails or not a digit
             pass
+
 
     ax.set_title(f'World State\n{title_info}')
 
@@ -159,7 +166,7 @@ def visualize_world(world, vis_config: VisualizationConfig, filename=None, show_
     center_y = (min_y + max_y) / 2
     range_x = max(max_x - min_x, 1.0)
     range_y = max(max_y - min_y, 1.0)
-    max_range = max(range_x, range_y, 20.0)
+    max_range = max(range_x, range_y, 20.0) # Ensure a minimum viewport size
     padding = max_range * 0.2
 
     ax.set_xlim(center_x - (max_range / 2 + padding),
@@ -174,9 +181,9 @@ def visualize_world(world, vis_config: VisualizationConfig, filename=None, show_
         timestamp = int(time.time())
         filename = f"world_state_{timestamp}.png"
 
-    full_path = os.path.join(save_dir, filename)
+    full_path = os.path.join(save_dir, filename) # save_dir is now from vis_config
     try:
-        plt.tight_layout(rect=[0, 0, 0.85, 1])
+        plt.tight_layout(rect=[0, 0, 0.85, 1]) # Adjust for legend
         plt.savefig(full_path)
         plt.close(fig)
         return full_path
@@ -196,21 +203,13 @@ def reset_trajectories():
 def save_gif(output_filename: str, vis_config: VisualizationConfig, frame_paths: list, delete_frames: bool = True):
     """
     Create a GIF from a list of frame image paths using visualization config.
-
-    Args:
-        output_filename (str): Name of the output GIF file (without directory).
-        vis_config (VisualizationConfig): Configuration for visualization settings.
-        frame_paths (list): List of paths to the image frames.
-        delete_frames (bool): Whether to delete individual frames after creating the GIF.
-
-    Returns:
-        str: Full path to the created GIF, or None if failed.
+    Assumes vis_config.save_dir is the correct directory for the output GIF.
     """
     if not frame_paths:
         print("No frame paths provided to create GIF.")
         return None
 
-    save_dir = vis_config.save_dir
+    save_dir = vis_config.save_dir # This should be the specific experiment's vis dir
     duration = vis_config.gif_frame_duration
     output_path = os.path.join(save_dir, output_filename)
 
@@ -228,7 +227,8 @@ def save_gif(output_filename: str, vis_config: VisualizationConfig, frame_paths:
             return None
 
         imageio.mimsave(output_path, images, duration=duration)
-        print(f"GIF saved successfully.")
+        print(f"GIF saved successfully to {output_path}.")
+
 
         if delete_frames:
             deleted_count = 0
@@ -253,17 +253,9 @@ def save_gif(output_filename: str, vis_config: VisualizationConfig, frame_paths:
 def create_gif_from_files(pattern: str, output_filename: str, vis_config: VisualizationConfig, delete_files: bool = False):
     """
     Create a GIF from existing image files matching a pattern in the visualization directory.
-
-    Args:
-        pattern (str): Glob pattern to match files (e.g., "eval_ep1_frame_*.png").
-        output_filename (str): Name of the output GIF file (without directory).
-        vis_config (VisualizationConfig): Configuration for visualization settings.
-        delete_files (bool): Whether to delete the matched image files after creating the GIF.
-
-    Returns:
-        str: Path to the created GIF, or None if failed.
+    Assumes vis_config.save_dir is the correct directory.
     """
-    save_dir = vis_config.save_dir
+    save_dir = vis_config.save_dir # This should be the specific experiment's vis dir
     search_pattern = os.path.join(save_dir, pattern)
     frame_paths = sorted(glob.glob(search_pattern))
 
@@ -273,7 +265,7 @@ def create_gif_from_files(pattern: str, output_filename: str, vis_config: Visual
 
     return save_gif(
         output_filename=output_filename,
-        vis_config=vis_config,
+        vis_config=vis_config, # Pass the config which contains the correct save_dir
         frame_paths=frame_paths,
         delete_frames=delete_files
     )
@@ -282,48 +274,57 @@ def create_gif_from_files(pattern: str, output_filename: str, vis_config: Visual
 if __name__ == "__main__":
     print("Running visualization example...")
     from configs import default_config
-    world_cfg = default_config.world
-    pf_cfg = default_config.particle_filter  # World needs pf_config now
-    vis_cfg = default_config.visualization
+    
+    # Create a temporary experiment-like structure for the example
+    example_exp_base = "temp_example_experiments"
+    example_exp_name = f"vis_example_{int(time.time())}"
+    example_exp_path = os.path.join(example_exp_base, example_exp_name)
+    example_vis_path = os.path.join(example_exp_path, "world_snapshots_example")
+    os.makedirs(example_vis_path, exist_ok=True)
+    
+    print(f"Example visualizations will be saved in: {os.path.abspath(example_vis_path)}")
 
-    # World constructor now expects world_config and pf_config
-    world = World(world_config=world_cfg, pf_config=pf_cfg)
+    # Get a copy of the default config to modify for this example
+    current_config = default_config.model_copy(deep=True)
+    current_config.visualization.save_dir = example_vis_path # Crucial: set the save_dir for this run
+    
+    world_cfg = current_config.world
+    # Estimator config is resolved by DefaultConfig's post_init, so world_cfg.estimator_config is an instance
+    
+    world = World(world_config=world_cfg) # World uses its own config's estimator_config
 
     reset_trajectories()
     example_frames = []
 
     print("Visualizing initial state...")
     initial_file = visualize_world(
-        world, vis_config=vis_cfg, filename="example_frame_000.png")
+        world, vis_config=current_config.visualization, filename="example_frame_000.png")
     if initial_file:
         example_frames.append(initial_file)
 
     print("Simulating 10 steps...")
     for i in range(10):
-        action = Velocity(0.5, 0.5, 0)
-        if world.true_landmark and world.agent:
-            dx = world.true_landmark.location.x - world.agent.location.x
-            dy = world.true_landmark.location.y - world.agent.location.y
-            dist = max(1e-6, (dx**2 + dy**2)**0.5)
-            step_speed = 1.0
-            action = Velocity(dx/dist * step_speed, dy/dist * step_speed, 0)
+        # Simple action: try to move towards (0,0) or a fixed point if landmark is far
+        action_yaw_norm = np.random.uniform(-0.5, 0.5) # Random small yaw change
 
-        world.step(action, training=False)
+        world.step(action_yaw_norm, training=False)
 
         step_file = visualize_world(
-            world, vis_config=vis_cfg, filename=f"example_frame_{i+1:03d}.png")
+            world, vis_config=current_config.visualization, filename=f"example_frame_{i+1:03d}.png")
         if step_file:
             example_frames.append(step_file)
 
     print("Creating example GIF...")
     gif_path = save_gif(
         output_filename="example_simulation.gif",
-        vis_config=vis_cfg,
+        vis_config=current_config.visualization, # Pass the config with the correct save_dir
         frame_paths=example_frames,
-        delete_frames=vis_cfg.delete_frames_after_gif
+        delete_frames=current_config.visualization.delete_frames_after_gif
     )
 
     if gif_path:
         print(f"Visualization example complete. GIF saved to: {gif_path}")
     else:
         print("Visualization example failed to create GIF.")
+    
+    print(f"To clean up, remove the directory: {os.path.abspath(example_exp_base)}")

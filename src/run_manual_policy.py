@@ -128,9 +128,17 @@ def run_manual_policy(config_name: str, num_steps: int, target_radius: float, re
         print("Rendering requested but libraries not found. Disabling rendering.")
         render = False
 
+    # For manual policy, visualizations are saved in a directory named after the policy
+    manual_policy_exp_dir = os.path.join(config.training.experiment_base_dir, f"manual_policy_{config_name}_r{target_radius}_{int(time.time())}")
+    vis_save_dir_actual = os.path.join(manual_policy_exp_dir, config.visualization.save_dir)
+    
     if render:
-        os.makedirs(config.visualization.save_dir, exist_ok=True)
+        os.makedirs(vis_save_dir_actual, exist_ok=True)
         reset_trajectories()
+        # Create a copy of vis_config to modify save_dir for this run
+        current_vis_config = config.visualization.model_copy()
+        current_vis_config.save_dir = vis_save_dir_actual
+
 
     world = World(world_config=config.world)
     total_reward = 0.0
@@ -140,12 +148,15 @@ def run_manual_policy(config_name: str, num_steps: int, target_radius: float, re
     print(f"Target Radius: {target_radius}, Agent Speed: {world.agent_speed}")
     print(f"Initial Agent Pos: {world.agent.location}, Vel: {world.agent.velocity}")
     print(f"Initial Landmark Pos: {world.true_landmark.location}")
+    if render:
+        print(f"Visualizations will be saved in: {os.path.abspath(vis_save_dir_actual)}")
+
 
     if render:
         try:
             initial_frame_file = visualize_world(
                 world=world,
-                vis_config=config.visualization,
+                vis_config=current_vis_config, # Use modified config with specific save_dir
                 filename=f"manual_policy_frame_000_initial.png",
                 collect_for_gif=True
             )
@@ -174,7 +185,7 @@ def run_manual_policy(config_name: str, num_steps: int, target_radius: float, re
                    # f"Action: {action_normalized:.3f}, "
                    f"Reward: {world.reward:.3f}, "
                    f"Total Reward: {total_reward:.3f}, "
-                   f"Agent-Lmk Dist: {world._calculate_range_measurement(agent_loc, landmark_loc):.2f}, "
+                   f"Agent-Lmk Dist: {world._calculate_planar_range_measurement(agent_loc, landmark_loc):.2f}, "
                    f"Est Error: {world.error_dist:.2f}, "
                    # f"Agent Pos: ({agent_loc.x:.1f}, {agent_loc.y:.1f}), "
                    f"Agent Hdg: {agent_heading_deg:.1f} deg")
@@ -184,7 +195,7 @@ def run_manual_policy(config_name: str, num_steps: int, target_radius: float, re
             try:
                 frame_file = visualize_world(
                     world=world,
-                    vis_config=config.visualization,
+                    vis_config=current_vis_config, # Use modified config
                     filename=f"manual_policy_frame_{step+1:03d}.png",
                     collect_for_gif=True
                 )
@@ -213,11 +224,11 @@ def run_manual_policy(config_name: str, num_steps: int, target_radius: float, re
         try:
             save_gif(
                 output_filename=gif_filename,
-                vis_config=config.visualization,
+                vis_config=current_vis_config, # Use modified config
                 frame_paths=episode_frames,
-                delete_frames=config.visualization.delete_frames_after_gif
+                delete_frames=current_vis_config.delete_frames_after_gif
             )
-            print(f"GIF saved to {os.path.join(config.visualization.save_dir, gif_filename)}")
+            print(f"GIF saved to {os.path.join(vis_save_dir_actual, gif_filename)}")
         except Exception as e: print(f"Error creating GIF: {e}")
 
 

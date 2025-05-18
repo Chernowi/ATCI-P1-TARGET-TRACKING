@@ -1,4 +1,4 @@
-from typing import Dict, Literal, Tuple, List
+from typing import Dict, Literal, Tuple, List, Optional
 from pydantic import BaseModel, Field
 import math
 
@@ -13,10 +13,10 @@ class SACConfig(BaseModel):
     action_dim: int = Field(CORE_ACTION_DIM, description="Action dimension (yaw_change)")
     hidden_dims: List[int] = Field([64, 64], description="List of hidden layer dimensions for MLP part")
     log_std_min: int = Field(-20, description="Minimum log std for action distribution")
-    log_std_max: int = Field(2, description="Maximum log std for action distribution")
+    log_std_max: int = Field(1, description="Maximum log std for action distribution")
     lr: float = Field(5e-5, description="Learning rate")
     gamma: float = Field(0.99, description="Discount factor")
-    tau: float = Field(0.01, description="Target network update rate")
+    tau: float = Field(0.005, description="Target network update rate")
     alpha: float = Field(0.2, description="Temperature parameter (Initial value if auto-tuning)")
     auto_tune_alpha: bool = Field(True, description="Whether to auto-tune the alpha parameter")
     use_rnn: bool = Field(False, description="Whether to use RNN layers in Actor/Critic (Recommended for trajectory state)")
@@ -25,17 +25,6 @@ class SACConfig(BaseModel):
     rnn_num_layers: int = Field(1, description="Number of RNN layers (Only used if use_rnn is True)")
 
 
-class TSACConfig(SACConfig):
-    """Configuration for the Transformer-SAC agent, inheriting from SACConfig"""
-    use_rnn: bool = Field(False, description="Ensure RNN is disabled for T-SAC's Transformer Critic")
-    # action_scale: float = Field(math.pi / 4, description="Maximum magnitude of yaw change action") # Inherited/Overridden if needed
-    embedding_dim: int = Field(128, description="Embedding dimension for states and actions in Transformer Critic")
-    transformer_n_layers: int = Field(2, description="Number of Transformer encoder layers in Critic")
-    transformer_n_heads: int = Field(4, description="Number of attention heads in Transformer Critic")
-    transformer_hidden_dim: int = Field(512, description="Hidden dimension within Transformer layers (FeedForward network)")
-    use_layer_norm_actor: bool = Field(True, description="Apply Layer Normalization in Actor MLP layers")
-    alpha: float = Field(0.1, description="Temperature parameter (Initial value if auto-tuning)") # Override SAC alpha
-
 class PPOConfig(BaseModel):
     """Configuration for the PPO agent"""
     state_dim: int = Field(CORE_STATE_DIM, description="Dimension of the basic state tuple (PPO uses the last state of trajectory)")
@@ -43,7 +32,7 @@ class PPOConfig(BaseModel):
     # action_scale: float = Field(math.pi / 4, description="Maximum magnitude of yaw change action") # See note in SACConfig
     hidden_dim: int = Field(256, description="Hidden layer dimension")
     log_std_min: int = Field(-20, description="Minimum log std for action distribution")
-    log_std_max: int = Field(2, description="Maximum log std for action distribution")
+    log_std_max: int = Field(1, description="Maximum log std for action distribution")
     actor_lr: float = Field(5e-6, description="Actor learning rate")
     critic_lr: float = Field(1e-3, description="Critic learning rate")
     gamma: float = Field(0.99, description="Discount factor")
@@ -67,10 +56,13 @@ class TrainingConfig(BaseModel):
     batch_size: int = Field(32, description="Batch size for training (Number of trajectories sampled)")
     save_interval: int = Field(1000, description="Interval (in episodes) for saving models")
     log_frequency: int = Field(10, description="Frequency (in episodes) for logging to TensorBoard")
-    models_dir: str = Field("models/sac/", description="Directory for saving models")
+    models_dir: str = Field("models/default_models/", description="Default directory if experiment structure fails or for old scripts (less used now)")
+    experiment_base_dir: str = Field("experiments", description="Base directory for saving all experiment data (logs, models, config)")
     learning_starts: int = Field(8000, description="Number of steps to collect before starting training updates")
     train_freq: int = Field(30, description="Update the policy every n environment steps")
     gradient_steps: int = Field(20, description="How many gradient steps to perform when training frequency is met")
+    normalize_rewards: bool = Field(True, description="Whether to normalize rewards using running mean/std (agent-side)")
+
 
 class EvaluationConfig(BaseModel):
     """Configuration for evaluation"""
@@ -129,7 +121,7 @@ class LeastSquaresConfig(BaseModel):
 
 class VisualizationConfig(BaseModel):
     """Configuration for visualization"""
-    save_dir: str = Field("world_snapshots", description="Directory for saving visualizations")
+    save_dir: str = Field("world_snapshots", description="Directory for saving visualizations (relative to experiment dir or absolute)")
     figure_size: tuple = Field((10, 8), description="Figure size for visualizations")
     max_trajectory_points: int = Field(100, description="Max trajectory points to display")
     gif_frame_duration: float = Field(0.2, description="Duration of each frame in generated GIFs")
@@ -142,6 +134,13 @@ class WorldConfig(BaseModel):
     agent_speed: float = Field(2.5, description="Constant speed of the agent")
     yaw_angle_range: Tuple[float, float] = Field((-math.pi / 8, math.pi / 8), description="Range of possible yaw angle changes per step [-max_change, max_change]")
 
+    # --- World Boundaries for Normalization ---
+    world_x_bounds: Tuple[float, float] = Field((-150.0, 150.0), description="Min/Max X boundaries of the world for normalization")
+    world_y_bounds: Tuple[float, float] = Field((-150.0, 150.0), description="Min/Max Y boundaries of the world for normalization")
+    landmark_depth_bounds: Tuple[float, float] = Field((0.0, 300.0), description="Min/Max depth for landmark, used for normalization")
+    normalize_state: bool = Field(True, description="Whether the world should provide normalized states to the agent.")
+
+
     # --- Initial Conditions & Randomization ---
     agent_initial_location: Position = Field(default_factory=Position, description="Initial agent position (used if randomization is false)")
     landmark_initial_location: Position = Field(default_factory=lambda: Position(x=42, y=42, depth=42), description="Initial landmark position (used if randomization is false)")
@@ -151,8 +150,9 @@ class WorldConfig(BaseModel):
     randomize_landmark_initial_location: bool = Field(True, description="Randomize landmark initial location?")
     randomize_landmark_initial_velocity: bool = Field(False, description="Randomize landmark initial velocity?")
 
-    agent_randomization_ranges: RandomizationRange = Field(default_factory=lambda: RandomizationRange(depth_range=(0.0, 0.0)), description="Ranges for agent location randomization")
-    landmark_randomization_ranges: RandomizationRange = Field(default_factory=RandomizationRange, description="Ranges for landmark location randomization")
+    # Use world_x/y_bounds for agent/landmark randomization if specific ranges are not needed, or keep these for finer control
+    agent_randomization_ranges: RandomizationRange = Field(default_factory=lambda: RandomizationRange(x_range=(-100.0,100.0), y_range=(-100.0,100.0), depth_range=(0.0, 0.0)), description="Ranges for agent location randomization")
+    landmark_randomization_ranges: RandomizationRange = Field(default_factory=lambda: RandomizationRange(x_range=(-100.0,100.0), y_range=(-100.0,100.0), depth_range=(0.0,300.0)), description="Ranges for landmark location randomization")
     landmark_velocity_randomization_ranges: VelocityRandomizationRange = Field(default_factory=VelocityRandomizationRange, description="Ranges for landmark velocity randomization")
 
     # --- State Representation ---
@@ -160,40 +160,28 @@ class WorldConfig(BaseModel):
     trajectory_feature_dim: int = Field(CORE_STATE_DIM + CORE_ACTION_DIM + TRAJECTORY_REWARD_DIM, description="Dimension of features per step in trajectory state (basic_state + prev_action + prev_reward)") # 8+1+1=10
 
     # --- Observations & Noise ---
-    range_measurement_base_noise: float = Field(0.001, description="Base standard deviation of range measurement noise")
-    range_measurement_distance_factor: float = Field(0.005, description="Factor by which range noise std dev increases with distance")
+    range_measurement_base_noise: float = Field(0, description="Base standard deviation of range measurement noise")
+    range_measurement_distance_factor: float = Field(0, description="Factor by which range noise std dev increases with distance")
 
     # --- Termination Conditions ---
     success_threshold: float = Field(0.5, description="Estimation error (2D distance) below which the episode is considered successful")
-    collision_threshold: float = Field(0.5, description="Agent-Landmark true distance below which a collision occurs (terminates episode)") # Adjusted default slightly
+    collision_threshold: float = Field(0.5, description="Agent-Landmark true distance below which a collision occurs (terminates episode)")
 
-    # --- Reward Function Parameters (Aligned with tracking.py logic) ---
-    # -- Estimation Error Reward --
-    reward_error_threshold: float = Field(1.0, description="Estimation error threshold for bonus reward") # Similar to old error_threshold
+    # --- Reward Function Parameters ---
+    reward_error_threshold: float = Field(1.0, description="Estimation error threshold for bonus reward")
     low_error_bonus: float = Field(1.0, description="Reward bonus when estimation error is below reward_error_threshold")
-    high_error_penalty_factor: float = Field(0.1, description="Penalty multiplier for estimation error exceeding threshold (penalty = factor * (error - threshold))") # Needs tuning
-    uninitialized_penalty: float = Field(1.0, description="Penalty applied if the estimator hasn't produced a valid estimate yet")
-
-    # -- Agent-Landmark Distance Reward (Based on True Distance) --
-    reward_distance_threshold: float = Field(15.0, description="True distance threshold for close distance bonus") # Corresponds to rew_dis_th
+    high_error_penalty_factor: float = Field(0.1, description="Penalty multiplier for estimation error exceeding threshold")
+    uninitialized_penalty: float = Field(1.0, description="Penalty if estimator hasn't produced a valid estimate")
+    reward_distance_threshold: float = Field(15.0, description="True distance threshold for close distance bonus")
     close_distance_bonus: float = Field(1.0, description="Reward bonus when true distance is below reward_distance_threshold")
-    distance_reward_scale: float = Field(0.0001, description="Scaling factor for distance reward shaping (reward = scale * (max_dist - current_dist))") # Needs tuning
-    max_distance_for_reward: float = Field(50.0, description="Maximum true distance up to which distance shaping reward is applied") # Corresponds to 0.7 * scale factor in tracking.py? Needs tuning.
+    distance_reward_scale: float = Field(0.0001, description="Scaling factor for distance reward shaping")
+    max_distance_for_reward: float = Field(50.0, description="Maximum true distance for distance shaping reward")
+    max_observable_range: float = Field(100.0, description="Maximum true distance considered 'in range' for penalty")
+    out_of_range_penalty: float = Field(0.1, description="Penalty if true distance exceeds max_observable_range")
+    landmark_collision_penalty: float = Field(1.0, description="Penalty for collision")
+    success_bonus: float = Field(30.0, description="Bonus reward upon success")
+    new_measurement_probability: float = Field(0.75, description="Probability at each step of recieving a new range measurement")
 
-    # -- Penalties & Bonuses --
-    max_observable_range: float = Field(100.0, description="Maximum true distance considered 'in range' for penalty calculation") # Corresponds to set_max_range
-    out_of_range_penalty: float = Field(0.1, description="Penalty applied when true distance exceeds max_observable_range")
-    landmark_collision_penalty: float = Field(1.0, description="Penalty applied when true distance is below collision_threshold")
-    success_bonus: float = Field(100.0, description="Bonus reward added upon reaching success_threshold")
-    # step_penalty: float = Field(0.1, description="Penalty subtracted each step") # Optional: Keep if desired, but tracking.py didn't have explicit step penalty
-
-    # --- Old Reward Parameters (Commented out/Removed) ---
-    # reward_scale: float = 0.005 # Replaced by new factors
-    # distance_threshold: float = 50.0 # Replaced by reward_distance_threshold and max_distance_for_reward
-    # error_threshold: float = 1.0 # Replaced by reward_error_threshold
-    # min_safe_distance: float = 2.0 # Concept replaced by collision_threshold penalty
-    # out_of_range_penalty: float = 100.0 # Replaced by new out_of_range_penalty (usually smaller)
-    # out_of_range_threshold: float = 100.0 # Replaced by max_observable_range
 
     # --- Landmark Estimator ---
     estimator_config: ParticleFilterConfig | LeastSquaresConfig = Field(default_factory=LeastSquaresConfig, description="Configuration for the landmark estimator")
@@ -202,7 +190,6 @@ class WorldConfig(BaseModel):
 class DefaultConfig(BaseModel):
     """Default configuration for the entire application"""
     sac: SACConfig = Field(default_factory=SACConfig, description="SAC agent configuration")
-    tsac: TSACConfig = Field(default_factory=TSACConfig, description="T-SAC agent configuration")
     ppo: PPOConfig = Field(default_factory=PPOConfig, description="PPO agent configuration")
     replay_buffer: ReplayBufferConfig = Field(default_factory=ReplayBufferConfig, description="Replay buffer configuration")
     training: TrainingConfig = Field(default_factory=TrainingConfig, description="Training configuration")
@@ -212,64 +199,78 @@ class DefaultConfig(BaseModel):
     least_squares: LeastSquaresConfig = Field(default_factory=LeastSquaresConfig, description="Least Squares estimator configuration")
     visualization: VisualizationConfig = Field(default_factory=VisualizationConfig, description="Visualization configuration")
     cuda_device: str = Field("cuda:0", description="CUDA device to use (e.g., 'cuda:0', 'cuda:1', 'cpu')")
-    algorithm: str = Field("sac", description="RL algorithm to use ('sac', 'ppo', or 'tsac')")
+    algorithm: str = Field("sac", description="RL algorithm to use ('sac' or 'ppo')")
 
     # Using model_post_init for Pydantic V2 compatibility
     def model_post_init(self, __context):
-        self._sync_sequence_lengths()
+        self._sync_dependent_configs()
         self._resolve_estimator_config()
+        self._update_models_dir_per_algo()
 
-    def _sync_sequence_lengths(self):
-        # Sequence length is primarily determined by world.trajectory_length
-        # Agent configs don't need explicit sequence_length if they use world's value
-        pass # Placeholder if any future sync is needed
+    def _sync_dependent_configs(self):
+        # Ensure randomization ranges are within world bounds if they are used as primary definition
+        # Or, ensure world_bounds are wide enough to encompass randomization_ranges
+        # For now, assume they are set independently, but a check could be added.
+        # Example: Make randomization ranges default to world_bounds if not specified otherwise.
+        if self.world.agent_randomization_ranges.x_range[0] < self.world.world_x_bounds[0] or \
+           self.world.agent_randomization_ranges.x_range[1] > self.world.world_x_bounds[1]:
+            print(f"Warning: Agent X randomization range {self.world.agent_randomization_ranges.x_range} may exceed world X bounds {self.world.world_x_bounds}. Clamping randomization to bounds.")
+            self.world.agent_randomization_ranges.x_range = (
+                max(self.world.agent_randomization_ranges.x_range[0], self.world.world_x_bounds[0]),
+                min(self.world.agent_randomization_ranges.x_range[1], self.world.world_x_bounds[1])
+            )
+        # Similar checks for Y and landmark ranges.
+        if self.world.agent_randomization_ranges.y_range[0] < self.world.world_y_bounds[0] or \
+           self.world.agent_randomization_ranges.y_range[1] > self.world.world_y_bounds[1]:
+            print(f"Warning: Agent Y randomization range {self.world.agent_randomization_ranges.y_range} may exceed world Y bounds {self.world.world_y_bounds}. Clamping randomization to bounds.")
+            self.world.agent_randomization_ranges.y_range = (
+                max(self.world.agent_randomization_ranges.y_range[0], self.world.world_y_bounds[0]),
+                min(self.world.agent_randomization_ranges.y_range[1], self.world.world_y_bounds[1])
+            )
+        
+        # Ensure landmark depth randomization is within landmark_depth_bounds for normalization
+        if self.world.landmark_randomization_ranges.depth_range[0] < self.world.landmark_depth_bounds[0] or \
+           self.world.landmark_randomization_ranges.depth_range[1] > self.world.landmark_depth_bounds[1]:
+            print(f"Warning: Landmark depth randomization range {self.world.landmark_randomization_ranges.depth_range} may exceed landmark depth bounds {self.world.landmark_depth_bounds}. Clamping randomization to bounds.")
+            self.world.landmark_randomization_ranges.depth_range = (
+                max(self.world.landmark_randomization_ranges.depth_range[0], self.world.landmark_depth_bounds[0]),
+                min(self.world.landmark_randomization_ranges.depth_range[1], self.world.landmark_depth_bounds[1])
+            )
+
 
     def _resolve_estimator_config(self):
-        # Ensure the estimator config in WorldConfig points to the correct instance
-        # based on some logic (e.g., a separate setting or default)
-        # Example: Defaulting to LeastSquares, but could be based on another field
-        if isinstance(self.world.estimator_config, type): # If it's just the class type
+        if isinstance(self.world.estimator_config, type): 
             if self.world.estimator_config == ParticleFilterConfig:
                 self.world.estimator_config = self.particle_filter
             elif self.world.estimator_config == LeastSquaresConfig:
                 self.world.estimator_config = self.least_squares
-            else: # Default case
+            else: 
                  self.world.estimator_config = self.least_squares
         elif not isinstance(self.world.estimator_config, (ParticleFilterConfig, LeastSquaresConfig)):
-             # If it's somehow invalid, default it
              print("Warning: Invalid estimator_config type in WorldConfig, defaulting to LeastSquares.")
              self.world.estimator_config = self.least_squares
+    
+    def _update_models_dir_per_algo(self):
+        if self.algorithm.lower() == "sac":
+            self.training.models_dir = "models/sac/"
+        elif self.algorithm.lower() == "ppo":
+            self.training.models_dir = "models/ppo/"
 
 
 default_config = DefaultConfig()
 
-# --- T-SAC Default Config (Example) ---
-tsac_default_config = DefaultConfig()
-tsac_default_config.algorithm = "tsac"
-tsac_default_config.world.trajectory_length = 8 # Must match transformer needs
-tsac_default_config.tsac.embedding_dim = 128
-tsac_default_config.tsac.transformer_n_layers = 2
-tsac_default_config.tsac.transformer_n_heads = 4
-tsac_default_config.tsac.transformer_hidden_dim = 256
-tsac_default_config.tsac.lr = 1e-4
-tsac_default_config.tsac.alpha = 0.1
-tsac_default_config.training.learning_starts = 2000
-tsac_default_config.training.batch_size = 128
-tsac_default_config.training.models_dir = "models/tsac/"
-# tsac_default_config._sync_sequence_lengths()
-# tsac_default_config._resolve_estimator_config()
-
-sac_rnn_config = DefaultConfig()
+sac_rnn_config = DefaultConfig(algorithm="sac")
 sac_rnn_config.sac.use_rnn = True
-sac_rnn_config.training.models_dir = "models/sac_rnn/"
 
-ppo_config = DefaultConfig()
-ppo_config.algorithm = "ppo"
-ppo_config.training.models_dir = "models/ppo/"
+ppo_config_obj = DefaultConfig(algorithm="ppo") # Renamed from ppo_config to avoid conflict with PPOConfig class
+
+# Re-run post_init for all predefined configs to apply updates
+for cfg_instance in [default_config, sac_rnn_config, ppo_config_obj]:
+    cfg_instance.model_post_init(None)
+
 
 CONFIGS: Dict[str, DefaultConfig] = {
     "default": default_config,
     "sac_rnn": sac_rnn_config,
-    "ppo": ppo_config,
-    "tsac_default": tsac_default_config,
+    "ppo": ppo_config_obj,
 }
