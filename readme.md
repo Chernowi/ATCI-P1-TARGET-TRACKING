@@ -64,8 +64,8 @@ The core idea is to train an RL agent to control the AUV's yaw angle, guiding it
 
 1.  **Clone the repository:**
     ```bash
-    git clone <your-repository-url>
-    cd <repository-name>
+    git clone github.com/Chernowi/ATCI-P1-TARGET-TRACKING
+    cd ATCI-P1-TARGET-TRACKING
     ```
 
 2.  **Create a Python virtual environment (recommended):**
