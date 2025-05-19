@@ -1,0 +1,315 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{listings}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{xcolor} % For texttt color
+\usepackage{caption} % For lstlisting caption spacing
+
+\geometry{a4paper, margin=1in}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    filecolor=magenta,      
+    urlcolor=cyan,
+    pdftitle={Reinforcement Learning for Autonomous Systems}, % Updated title
+    pdfpagemode=FullScreen,
+}
+
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+\definecolor{keywordcolor}{rgb}{0.13, 0.29, 0.53} 
+\definecolor{stringcolor}{rgb}{0.73, 0.13, 0.13} 
+\definecolor{commentcolor}{rgb}{0.38, 0.62, 0.38} 
+\definecolor{javared}{rgb}{0.6,0,0} 
+\definecolor{javagreen}{rgb}{0.25,0.5,0.35} 
+\definecolor{javapurple}{rgb}{0.5,0,0.35} 
+\definecolor{javadocblue}{rgb}{0.25,0.35,0.75} 
+
+\lstdefinestyle{pythonstyle}{
+    backgroundcolor=\color{backcolour},   
+    commentstyle=\color{javagreen}\itshape,
+    keywordstyle=\color{javapurple}\bfseries,
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{javared},
+    basicstyle=\footnotesize\ttfamily,
+    breakatwhitespace=false,         
+    breaklines=true,                 
+    captionpos=b,                    
+    keepspaces=true,                 
+    numbers=left,                    
+    numbersep=5pt,                  
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,                  
+    tabsize=2,
+    emph={self}, emphstyle={\color{black}}, 
+    breakautoindent=true, 
+    postbreak=\mbox{\textcolor{red}{$\hookrightarrow$}\space}, 
+    abovecaptionskip=0.5em, % Add some space above caption
+    belowcaptionskip=0.5em  % Add some space below caption
+}
+\lstset{style=pythonstyle}
+
+\newcommand{\code}[1]{\texttt{#1}} % Macro for inline code
+
+\title{Reinforcement Learning for Autonomous Systems: \\ Implementations for Oil Spill Mapping and Landmark Tracking} % Updated title
+\author{Implementation Analysis}
+\date{\today}
+
+\begin{document}
+\maketitle
+\begin{abstract}
+This document outlines a Reinforcement Learning (RL) framework conceptually applied to two distinct autonomous system challenges: oil spill mapping and underwater landmark tracking. Both systems conceptually utilize Soft Actor-Critic (SAC) or Proximal Policy Optimization (PPO) agents to navigate simulated 2D environments. The actual implementations reside in separate software repositories, though they share significant architectural similarities and leverage common RL principles. The landmark tracking project, in particular, aims to replicate and build upon the methodologies presented in Masmitja et al. (2023) \cite{masmitja2023tracking}. This document details the shared conceptual RL framework, including the configuration system philosophy, agent architectures, and training workflows. It then delves into the project-specific adaptations within each respective repository, covering their unique environment designs, state and action representations, reward structures, specialized components like landmark estimators, and project-specific experimental designs aimed at evaluating algorithmic performance and feature impact based on explicitly defined configurations.
+\end{abstract}
+
+\section{Introduction}
+Autonomous systems navigating complex and dynamic environments represent a significant domain for Reinforcement Learning. This document describes the conceptual design and specific implementations of an RL framework applied to two such problems, developed in separate software repositories:
+\begin{enumerate}
+    \item \textbf{Autonomous Oil Spill Mapping}: An RL-driven agent controls a simulated vehicle to efficiently survey an area and estimate the boundaries of an oil spill.
+    \item \textbf{Autonomous Underwater Landmark Tracking}: An RL-driven agent controls a simulated vehicle to actively maneuver and improve its estimation of a potentially moving underwater landmark's position using range-only acoustic measurements. This project is inspired by and seeks to replicate aspects of the work by Masmitja et al. (2023) \cite{masmitja2023tracking} on range-only underwater target localization.
+\end{enumerate}
+While developed independently, both projects leverage a common foundation of RL algorithms, specifically Soft Actor-Critic (SAC) \cite{sac_paper} and Proximal Policy Optimization (PPO) \cite{ppo_paper}, which are well-suited for continuous control tasks. This document details the shared conceptual framework components and the specific design choices made within each project's codebase to tailor these algorithms to the respective problem domains.
+
+The core architectural philosophy across both repositories emphasizes modularity and configurability. Centralized configuration systems, managed through Pydantic models in project-specific \code{configs.py} files, allow for systematic experimentation. Despite the separate codebases, the structural approach to defining agents, environments, and training pipelines exhibits strong parallels. Each project, however, features a unique environment, distinct state and action space definitions, and specialized reward engineering to guide the learning process effectively within its own context.
+
+\section{Core Framework Concepts and Configuration Philosophy}
+A common set of tools and a unified configuration philosophy are employed conceptually across both projects, even though they are implemented in separate repositories. This facilitates understanding the underlying design patterns.
+
+\subsection{Centralized Configuration (Project-Specific \code{configs.py})}
+In each project's repository, all major parameters for the agents, environments, training, and evaluation are managed through Pydantic models defined in a dedicated \code{configs.py} file. A \code{DefaultConfig} class (or a similarly named top-level configuration class) serves as the main container. This class holds specific configurations for SAC (\code{SACConfig}), PPO (\code{PPOConfig}), the world (\code{WorldConfig}), replay buffers (\code{ReplayBufferConfig}), training (\code{TrainingConfig}), evaluation (\code{EvaluationConfig}), visualization (\code{VisualizationConfig}), and other project-specific components (e.g., \code{MapperConfig} for Oil Spill, \code{ParticleFilterConfig} for Landmark Tracking).
+
+Key global constants or default fields within each project's \code{WorldConfig} define the core dimensionality of observations and actions for that specific application:
+\begin{itemize}
+    \item \code{CORE\_STATE\_DIM}: Dimension of the basic instantaneous state tuple. For the Oil Spill project, this is 8 (5 sensor readings + normalized X, Y, heading). For the Landmark Tracking project, it is 9 (agent\_x, y, vx, vy, heading, est\_landmark\_x, y, depth, range), aligning with the type of observations used in range-only localization problems \cite{masmitja2023tracking}.
+    \item \code{CORE\_ACTION\_DIM}: Dimension of the agent's action space. This is 1 for both projects, representing a normalized yaw change.
+    \item \code{TRAJECTORY\_REWARD\_DIM}: Dimension of the reward component in the trajectory history, typically 1.
+\end{itemize}
+The configuration system in each repository supports creating variations of default settings, allowing for easy setup of hyperparameter sweeps or different experimental conditions. This is crucial for the experimental designs detailed in Section \ref{sec:experimental_design_oil_spill} and Section \ref{sec:experimental_design_landmark_tracker}.
+
+% ... (rest of sections 2 and 3 remain largely the same, emphasizing conceptual parallels) ...
+
+\section{Project 1: Autonomous Oil Spill Mapping}
+This project, developed in its own repository, focuses on training an agent to autonomously map an oil spill in a 2D simulated environment.
+
+\subsection{Experimental Design and Research Questions (Oil Spill Mapping)}
+\label{sec:experimental_design_oil_spill}
+The \code{configs.py} file within the Oil Spill Mapping project's repository defines a set of base configurations and variations for experimentation specific to this task.
+
+\subsubsection{Base Configurations (Oil Spill Mapping)}
+The \code{CONFIGS} dictionary in the Oil Spill Mapping \code{configs.py} defines several foundational experimental setups:
+\begin{itemize}
+    \item \textbf{\code{"default\_sac\_mlp"}}: Serves as the baseline SAC agent with an MLP architecture and standard parameters for the oil spill mapping environment. This is also aliased as \code{"default\_mapping"}.
+    \item \textbf{\code{"default\_ppo\_mlp"}}: Baseline PPO agent with an MLP architecture.
+    \item \textbf{\code{"default\_sac\_rnn"}}: SAC agent employing an RNN (LSTM by default, \code{sac.rnn\_hidden\_size = 68}) to process trajectory history.
+    \item \textbf{\code{"default\_ppo\_rnn"}}: PPO agent employing an RNN (GRU by default, \code{ppo.rnn\_hidden\_size = 64}).
+\end{itemize}
+
+\subsubsection{Hyperparameter Variations (Oil Spill Mapping)}
+The configuration file systematically generates variations for key hyperparameters of SAC MLP, PPO MLP, and SAC RNN agents.
+
+\paragraph{SAC MLP Hyperparameter Variations:} Based on \code{"default\_sac\_mlp"}:
+\begin{itemize}
+    \item \textbf{Learning Rates}: Actor LR (\code{sac.actor\_lr}: 1e-5, 1e-4), Critic LR (\code{sac.critic\_lr}: 1e-5, 1e-4).
+    \item \textbf{Discount Factor}: Gamma (\code{sac.gamma}: 0.95, 0.999).
+    \item \textbf{Target Update Rate}: Tau (\code{sac.tau}: 0.001, 0.01).
+    \item \textbf{Network Size}: Hidden Dims (\code{sac.hidden\_dims}: [64,64], [256,256]).
+\end{itemize}
+These result in named configurations like \code{"sac\_mlp\_actor\_lr\_low"}, \code{"sac\_mlp\_hidden\_dims\_large"}, etc.
+
+\paragraph{PPO MLP Hyperparameter Variations:} Based on \code{"default\_ppo\_mlp"}:
+\begin{itemize}
+    \item \textbf{Learning Rates}: Actor LR (\code{ppo.actor\_lr}: 1e-5, 1e-4).
+    \item \textbf{GAE Lambda}: (\code{ppo.gae\_lambda}: 0.90, 0.99).
+    \item \textbf{Policy Clip}: (\code{ppo.policy\_clip}: 0.1, 0.3).
+    \item \textbf{Entropy Coefficient}: (\code{ppo.entropy\_coef}: 0.005, 0.5).
+    \item \textbf{Network Size}: Hidden Dim (\code{ppo.hidden\_dim}: 128, 512).
+\end{itemize}
+These result in named configurations like \code{"ppo\_mlp\_actor\_lr\_high"}, \code{"ppo\_mlp\_policy\_clip\_low"}, etc.
+
+\paragraph{SAC RNN Hyperparameter Variations:} Based on \code{"default\_sac\_rnn"}:
+\begin{itemize}
+    \item \textbf{RNN Hidden Size}: (\code{sac.rnn\_hidden\_size}: 32, 128).
+\end{itemize}
+Resulting in configurations like \code{"sac\_rnn\_rnn\_hidden\_size\_small"}.
+
+\paragraph{SAC MLP with Prioritized Experience Replay (PER):}
+\begin{itemize}
+    \item \textbf{\code{"sac\_mlp\_per"}}: Based on \code{"default\_sac\_mlp"} with \code{sac.use\_per = True}.
+\end{itemize}
+
+\subsubsection{Research Questions (Oil Spill Mapping)}
+This experimental setup aims to answer:
+\begin{enumerate}
+    \item \textbf{Algorithm Comparison}: How do SAC and PPO (MLP versions) compare in terms of mapping efficiency (coverage vs. steps), sample efficiency, and final performance? (Comparing \code{"default\_sac\_mlp"} vs. \code{"default\_ppo\_mlp"}).
+    \item \textbf{Impact of Recurrence}: Does incorporating RNNs improve the ability of SAC and PPO agents to learn effective mapping strategies, potentially by better utilizing temporal patterns in sensor readings? (Comparing MLP vs. RNN versions for both SAC and PPO).
+    \item \textbf{Benefit of PER for SAC}: Does PER accelerate learning or lead to better final mapping performance for the SAC MLP agent? (Comparing \code{"default\_sac\_mlp"} with \code{"sac\_mlp\_per"}).
+    \item \textbf{Sensitivity to Hyperparameters}: How do variations in learning rates, network sizes, discount factors, and other key hyperparameters affect the performance of SAC MLP, PPO MLP, and SAC RNN agents in the mapping task?
+\end{enumerate}
+
+\subsection{Environment: Oil Spill Mapping World (\code{world\_oil\_spill.py})}
+The custom-built environment (from the Oil Spill project's repository) simulates the oil spill mapping task. \code{CORE\_STATE\_DIM} is 8, \code{CORE\_ACTION\_DIM} is 1.
+
+\subsubsection{Environment Setup and Dynamics}
+% (Summary: Spill generation, agent initialization, sensing with 5 binary sensors, Convex Hull mapping via MapperConfig, termination on coverage/OOB/max steps)
+\begin{itemize}
+    \item Spill: \code{num\_oil\_points}, randomized cluster.
+    \item Agent: Randomized start, constant speed, \code{num\_sensors}, \code{sensor\_distance}, \code{sensor\_radius}.
+    \item Mapper: Uses \code{MapperConfig}, estimates hull, \code{performance\_metric} is oil point inclusion.
+    \item Termination: \code{success\_metric\_threshold}, \code{terminate\_out\_of\_bounds}, \code{max\_steps}.
+\end{itemize}
+
+\subsubsection{State Representation}
+\begin{itemize}
+    \item Basic State (8-dim): 5 sensor readings, normalized X, Y, normalized heading.
+    \item Trajectory History (length 10): Sequence of (normalized basic state, action, raw reward). Feature dim 10.
+\end{itemize}
+
+\subsubsection{Action Space}
+\begin{itemize}
+    \item Continuous, 1-dim: Normalized yaw change, scaled by \code{yaw\_angle\_range[1]}.
+\end{itemize}
+
+\subsubsection{Reward Engineering for Mapping}
+\begin{itemize}
+    \item Coverage improvement (\code{metric\_improvement\_scale}).
+    \item Exploration bonuses/penalties (new oil detection, uninitialized mapper).
+    \item Efficiency/Safety penalties (step, out-of-bounds).
+    \item Success bonus.
+\end{itemize}
+
+\subsection{Oil Spill Mapping Results}
+%%% USER: ADD RESULTS FOR OIL SPILL MAPPING HERE %%%
+
+\section{Project 2: Autonomous Underwater Landmark Tracking}
+This project, developed in its own separate repository, focuses on training an agent to autonomously navigate and improve its estimate of a landmark's position in a 2D environment using noisy range-only measurements. This work is directly inspired by the challenges and methodologies for range-only underwater target localization presented by Masmitja et al. (2023) \cite{masmitja2023tracking}, and aims to replicate and potentially extend their approach using deep reinforcement learning for path planning.
+
+\subsection{Experimental Design and Research Questions (Landmark Tracking)}
+\label{sec:experimental_design_landmark_tracker}
+The \code{configs.py} file within the Landmark Tracking project's repository defines its specific set of base configurations and variations. The problem formalization, including the environment setup, agent model, and measurement model, draws from the scenario described in \cite{masmitja2023tracking}.
+
+\subsubsection{Base Configurations (Landmark Tracking)}
+The \code{CONFIGS} dictionary in the Landmark Tracking \code{configs.py} includes:
+\begin{itemize}
+    \item \textbf{\code{"default"}}: Serves as the baseline, an SAC MLP agent with standard parameters for the Landmark Tracking environment. The default estimator is Least Squares, similar to the approach used for target position estimation in \cite{masmitja2023tracking}.
+    \item \textbf{Signal Quality Variations}: Based on the SAC MLP agent, these configurations explore scenarios with different levels of observation noise and measurement availability, which are critical factors in underwater acoustic localization.
+        \begin{itemize}
+            \item \code{"default\_poor\_signal"}: Increased range measurement noise and reduced measurement probability.
+            \item \code{"default\_good\_signal"}: Reduced range measurement noise and increased measurement probability.
+        \end{itemize}
+    \item \textbf{Algorithm and Architecture Variations}:
+        \begin{itemize}
+            \item \code{"sac\_rnn"}: SAC agent employing an RNN (LSTM by default, \code{sac.rnn\_hidden\_size = 128}). This explores if temporal information processing aids in path planning under noisy conditions.
+            \item \code{"sac\_per"}: SAC MLP agent augmented with Prioritized Experience Replay.
+            \item \code{"ppo\_mlp"}: PPO agent with an MLP architecture.
+            \item \code{"ppo\_rnn"}: PPO agent employing an RNN (LSTM by default, \code{ppo.rnn\_hidden\_size = 128}).
+        \end{itemize}
+\end{itemize}
+
+\subsubsection{Hyperparameter Variations (Landmark Tracking)}
+Variations for SAC MLP and PPO MLP agents are defined to assess sensitivity.
+
+\paragraph{SAC MLP Hyperparameter Variations:} Based on \code{"default"}:
+\begin{itemize}
+    \item Learning Rates (Actor/Critic), Discount Factor, Target Update Rate, Network Size, Initial Alpha.
+\end{itemize}
+
+\paragraph{PPO MLP Hyperparameter Variations:} Based on \code{"ppo\_mlp"}:
+\begin{itemize}
+    \item Learning Rates (Actor/Critic), GAE Lambda, Policy Clip, Entropy Coefficient, Network Size, N Epochs.
+\end{itemize}
+
+\subsubsection{Research Questions (Landmark Tracking)}
+This experimental setup aims to answer:
+\begin{enumerate}
+    \item \textbf{Algorithm Comparison}: How do SAC and PPO (MLP versions) compare in terms of tracking accuracy (estimation error), success rate, and sample efficiency when applied to the range-only localization problem similar to \cite{masmitja2023tracking}?
+    \item \textbf{Impact of Recurrence}: Does using RNNs in SAC and PPO improve performance, especially for tracking potentially mobile landmarks or when dealing with sequences of noisy range measurements?
+    \item \textbf{Benefit of PER for SAC}: Does PER lead to faster convergence or better final tracking accuracy for the SAC MLP agent in this specific localization context?
+    \item \textbf{Sensitivity to Hyperparameters}: How robust are SAC MLP and PPO MLP agents to changes in their core hyperparameters for the tracking task?
+    \item \textbf{Effect of Observation Quality}: How significantly does sensor noise and measurement frequency impact the agent's ability to learn effective tracking policies, reflecting challenges in real-world underwater acoustic environments?
+\end{enumerate}
+
+
+\subsection{Environment: Landmark Tracking World (\code{world.py})}
+The environment (from the Landmark Tracking project's repository) simulates an agent (e.g., an ASV) tracking a landmark (e.g., a benthic rover or tagged animal) using range-only measurements. \code{CORE\_STATE\_DIM} is 9, \code{CORE\_ACTION\_DIM} is 1. The setup is analogous to the single-tracker, single-target scenario considered in \cite{masmitja2023tracking}.
+
+\subsubsection{Environment Setup and Dynamics}
+% (Summary: World boundaries, agent/landmark dynamics, noisy range observation, Particle Filter/Least Squares estimator, termination on error/collision/max steps)
+\begin{itemize}
+    \item World: Defined bounds (\code{world\_x\_bounds}, etc.), state normalization. Agent operates in 2D.
+    \item Agent: Constant speed (\code{agent\_speed}), randomized start. Kinematics model is simplified as in \cite{masmitja2023tracking}, where the RL action controls yaw increment.
+    \item Landmark: Target position (\code{q} in \cite{masmitja2023tracking}) can be static or mobile, randomized start. Target depth is assumed known by the agent for planar range projection.
+    \item Observation: Noisy range (\code{d_t} in \cite{masmitja2023tracking}), modeled with \code{range\_measurement\_base\_noise}, \code{range\_measurement\_distance\_factor}, and \code{new\_measurement\_probability}.
+    \item Estimator: \code{ParticleFilterConfig} or \code{LeastSquaresConfig} (default) via \code{world\_config.estimator\_config}. The LS estimator mirrors the simple, computationally efficient method used in \cite{masmitja2023tracking} for online position updates.
+    \item Termination: \code{success\_threshold} on estimation error, \code{collision\_threshold}, \code{max\_steps}.
+\end{itemize}
+
+\subsubsection{State Representation}
+The state representation includes agent kinematics, estimated target position, and the current range measurement, analogous to the information available to the agent in \cite{masmitja2023tracking}'s problem formulation (denoted as $o_t$ in their paper, which includes $p_t, v_t, \tilde{d}_t, d_{pt}$).
+\begin{itemize}
+    \item Basic State (9-dim): Agent pos/vel/hdg, est. landmark pos/depth, current range. All normalized.
+    \item Trajectory History (length 10): Sequence of (normalized basic state, action, raw reward). Feature dim 11.
+\end{itemize}
+
+\subsubsection{Action Space}
+\begin{itemize}
+    \item Continuous, 1-dim: Normalized yaw change $\Delta\psi$, scaled by \code{yaw\_angle\_range[1]}. This directly influences the agent's next waypoint or heading.
+\end{itemize}
+
+\subsubsection{Reward Engineering for Landmark Tracking}
+The reward function is designed to guide the agent to optimize its trajectory for accurate target localization, similar to the objective in \cite{masmitja2023tracking}. It combines elements related to estimation accuracy and agent behavior.
+\begin{itemize}
+    \item Estimation Error: Log-based reward for low error ($e_q$ in \cite{masmitja2023tracking}), scaled.
+    \item Distance to Landmark: Small penalty for true distance ($\hat{d}$ in \cite{masmitja2023tracking}'s reward $r_d$).
+    \item Terminal Conditions: Implicit success bonus, collision penalty. (A terminal reward $r_{terminal}$ is also described in \cite{masmitja2023tracking}).
+\end{itemize}
+
+\subsection{Landmark Tracking Results}
+%%% USER: ADD RESULTS FOR LANDMARK TRACKING HERE %%%
+
+\section{Training and Evaluation Workflow (Conceptual Similarities)}
+The training and evaluation workflow, while implemented in separate repositories, follows similar conceptual steps managed by a \code{main.py}-like script and algorithm-specific training functions.
+\begin{itemize}
+    \item \textbf{Experiment Management}: As described in Section 2.2, each project run generates a dedicated experiment directory.
+    \item \textbf{Training Process}:
+        \begin{itemize}
+            \item \textbf{SAC}: Off-policy, updates from replay buffer. Parameters like \code{learning\_starts}, \code{train\_freq}, \code{gradient\_steps}, and batch sizes are set in the respective \code{training\_config}.
+            \item \textbf{PPO}: On-policy, collects rollouts and updates. Parameters like \code{steps\_per\_update} and \code{n\_epochs} are set in the respective \code{ppo\_config}.
+        \end{itemize}
+    \item \textbf{Evaluation}:
+        \begin{itemize}
+            \item Conducted using dedicated functions like \code{evaluate\_sac} or \code{evaluate\_ppo} in each project.
+            \item Evaluation parameters are controlled by the project's \code{evaluation\_config}.
+            \item Visualizations are generated via the project's \code{visualization.py} if rendering is enabled.
+        \end{itemize}
+    \item \textbf{Manual Policy Execution (Landmark Tracker)}: The Landmark Tracking repository includes \code{run\_manual\_policy.py} for baseline testing, which can be compared against learned policies, similar to how RL approaches are compared to analytical or predefined paths in \cite{masmitja2023tracking}.
+\end{itemize}
+
+\section{Conclusion}
+This document has detailed a Reinforcement Learning framework whose concepts and architectural patterns have been applied to two distinct autonomous system challenges—oil spill mapping and underwater landmark tracking—each implemented within its own software repository. Despite separate codebases, a common philosophy emphasizing modularity, configurability via Pydantic models, and standardized experiment management underpins both efforts. Project-specific experimental designs allow for systematic investigation into algorithmic performance, the impact of architectural choices like recurrence and PER, hyperparameter sensitivity, and the effects of environmental factors relevant to each task.
+
+For the \textbf{oil spill mapping project}, the implementation focuses on interpreting sparse sensor data for geometric spill estimation, with rewards driving efficient coverage. Its experimental design aims to identify optimal agent configurations for this mapping context.
+For the \textbf{autonomous underwater landmark tracking project}, the implementation centers on active perception, drawing inspiration from Masmitja et al. (2023) \cite{masmitja2023tracking}. The agent learns to maneuver to improve the accuracy of its internal landmark estimator based on noisy range-only measurements. Its experimental setup investigates the influence of sensor quality, and RL agent configuration on tracking efficacy in scenarios analogous to those in underwater acoustics.
+
+Both projects benefit from trajectory-based state representations and the option for recurrent neural network architectures to capture temporal dependencies. The modular design and comprehensive configuration options support the systematic investigation of the posed research questions for each domain. The findings from these experiments will provide insights into the most effective RL approaches for these distinct autonomous system problems and guide future development in each domain.
+
+\section*{References}
+\begin{thebibliography}{99} % Increased bibliography capacity
+    \bibitem{sac_paper}
+    Haarnoja, T., Zhou, A., Abbeel, P., \& Levine, S. (2018). Soft Actor-Critic: Off-Policy Maximum Entropy Deep Reinforcement Learning with a Stochastic Actor. \textit{arXiv preprint arXiv:1801.01290}.
+
+    \bibitem{ppo_paper}
+    Schulman, J., Wolski, F., Dhariwal, P., Radford, A., \& Klimov, O. (2017). Proximal Policy Optimization Algorithms. \textit{arXiv preprint arXiv:1707.06347}.
+
+    \bibitem{masmitja2023tracking}
+    Masmitja, I., Martin, M., Katija, K., Gomariz, S., \& Navarro, J. (2023). A reinforcement learning path planning approach for range-only underwater target localization with autonomous vehicles. \textit{arXiv preprint arXiv:2301.06863}.
+\end{thebibliography}
+
+\end{document}

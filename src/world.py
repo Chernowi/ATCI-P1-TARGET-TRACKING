@@ -115,7 +115,9 @@ class World():
         if not self.world_config.normalize_state:
             return raw_state_tuple
 
-        ax_raw, ay_raw, avx_raw, avy_raw, lx_raw, ly_raw, ldepth_raw, range_raw = raw_state_tuple
+        # Unpack the 9 components
+        ax_raw, ay_raw, avx_raw, avy_raw, aheading_raw, \
+        lx_raw, ly_raw, ldepth_raw, range_raw = raw_state_tuple
         
         ax_norm = self._normalize_value(ax_raw, self.world_config.world_x_bounds[0], self.world_config.world_x_bounds[1])
         ay_norm = self._normalize_value(ay_raw, self.world_config.world_y_bounds[0], self.world_config.world_y_bounds[1])
@@ -123,6 +125,9 @@ class World():
         # Agent speed is constant, so vx/vy are components. Normalize by speed.
         avx_norm = np.clip(avx_raw / self.agent_speed if self.agent_speed > 1e-6 else 0.0, -1.0, 1.0)
         avy_norm = np.clip(avy_raw / self.agent_speed if self.agent_speed > 1e-6 else 0.0, -1.0, 1.0)
+
+        # Normalize heading: raw heading in [-pi, pi] is mapped to [-1, 1]
+        aheading_norm = np.clip(aheading_raw / math.pi, -1.0, 1.0)
         
         # Estimated landmark position is also normalized by world bounds
         lx_norm = self._normalize_value(lx_raw, self.world_config.world_x_bounds[0], self.world_config.world_x_bounds[1])
@@ -133,7 +138,8 @@ class World():
         # Normalize range to [0, 1] using max possible diagonal range in 2D world
         range_norm = np.clip(range_raw / self.max_world_diagonal_range, 0.0, 1.0) # Or map to [-1,1] if preferred
 
-        return (ax_norm, ay_norm, avx_norm, avy_norm, lx_norm, ly_norm, ldepth_norm, range_norm)
+        return (ax_norm, ay_norm, avx_norm, avy_norm, aheading_norm,
+                lx_norm, ly_norm, ldepth_norm, range_norm)
 
     def _calculate_planar_range_measurement(self, loc1: Location, loc2: Location) -> float:
         dx, dy = loc1.x - loc2.x, loc1.y - loc2.y
@@ -163,6 +169,9 @@ class World():
     def _get_basic_state_tuple(self) -> Tuple:
         """ Encodes the instantaneous basic state (RAW values). """
         agent_loc, agent_vel = self.agent.location, self.agent.velocity
+        # Calculate agent heading (orientation in XY plane)
+        agent_heading_rad = math.atan2(agent_vel.y, agent_vel.x) # radians in [-pi, pi]
+
         est_loc = self.estimated_landmark.estimated_location if self.estimated_landmark.estimated_location else Location(0,0,0) # Use (0,0,0) if not initialized
         # Use configured depth bounds if estimator has no depth or for consistent state representation
         # Landmark depth for state is estimated depth, or 0 if no depth info from estimator.
@@ -170,7 +179,7 @@ class World():
         # The state tuple needs a consistent depth value. If estimator provides it, use it. Otherwise 0.
         landmark_depth_for_state = est_loc.depth if hasattr(est_loc, 'depth') and est_loc.depth is not None else 0.0
 
-        return (agent_loc.x, agent_loc.y, agent_vel.x, agent_vel.y,
+        return (agent_loc.x, agent_loc.y, agent_vel.x, agent_vel.y, agent_heading_rad,
                 est_loc.x, est_loc.y, landmark_depth_for_state, self.current_range)
 
     def _initialize_trajectory_history(self):
@@ -304,7 +313,10 @@ class World():
         last_norm_s_tuple_from_loaded_traj = tuple(loaded_full_trajectory[-1, :CORE_STATE_DIM])
         
         # De-normalize the last state to set current world raw attributes
-        ax_n, ay_n, avx_n, avy_n, lx_n, ly_n, ldepth_n, range_n = last_norm_s_tuple_from_loaded_traj
+        # Unpack 9 components
+        ax_n, ay_n, avx_n, avy_n, aheading_n, \
+        lx_n, ly_n, ldepth_n, range_n = last_norm_s_tuple_from_loaded_traj
+
 
         self.agent.location.x = self._denormalize_value(ax_n, self.world_config.world_x_bounds[0], self.world_config.world_x_bounds[1])
         self.agent.location.y = self._denormalize_value(ay_n, self.world_config.world_y_bounds[0], self.world_config.world_y_bounds[1])
@@ -326,16 +338,25 @@ class World():
             reward_i = loaded_full_trajectory[i, CORE_STATE_DIM + CORE_ACTION_DIM]
 
             # Denormalize s_norm_tuple_i to get s_raw_tuple_i
-            ax_ni, ay_ni, avx_ni, avy_ni, lx_ni, ly_ni, ldepth_ni, range_ni = s_norm_tuple_i
+            # Unpack 9 components
+            ax_ni, ay_ni, avx_ni, avy_ni, aheading_ni, \
+            lx_ni, ly_ni, ldepth_ni, range_ni = s_norm_tuple_i
+
             s_raw_ax = self._denormalize_value(ax_ni, self.world_config.world_x_bounds[0], self.world_config.world_x_bounds[1])
             s_raw_ay = self._denormalize_value(ay_ni, self.world_config.world_y_bounds[0], self.world_config.world_y_bounds[1])
             s_raw_avx = avx_ni * self.agent_speed
             s_raw_avy = avy_ni * self.agent_speed
+            
+            # Denormalize heading: [-1, 1] -> [-pi, pi]
+            s_raw_aheading = aheading_ni * math.pi
+            
             s_raw_lx = self._denormalize_value(lx_ni, self.world_config.world_x_bounds[0], self.world_config.world_x_bounds[1])
             s_raw_ly = self._denormalize_value(ly_ni, self.world_config.world_y_bounds[0], self.world_config.world_y_bounds[1])
             s_raw_ldepth = self._denormalize_value(ldepth_ni, self.world_config.landmark_depth_bounds[0], self.world_config.landmark_depth_bounds[1])
             s_raw_range = range_ni * self.max_world_diagonal_range
-            s_raw_tuple_i = (s_raw_ax, s_raw_ay, s_raw_avx, s_raw_avy, s_raw_lx, s_raw_ly, s_raw_ldepth, s_raw_range)
+            
+            s_raw_tuple_i = (s_raw_ax, s_raw_ay, s_raw_avx, s_raw_avy, s_raw_aheading,
+                             s_raw_lx, s_raw_ly, s_raw_ldepth, s_raw_range)
             
             self._trajectory_history.append((s_raw_tuple_i, action_i, reward_i))
 

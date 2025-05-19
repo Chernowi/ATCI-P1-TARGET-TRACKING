@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 import math
 
 # Core dimensions
-CORE_STATE_DIM = 8 # agent_x, agent_y, agent_vx, agent_vy, landmark_x, landmark_y, landmark_depth, current_range
+CORE_STATE_DIM = 9 # agent_x, agent_y, agent_vx, agent_vy, agent_heading_rad, landmark_x, landmark_y, landmark_depth, current_range
 CORE_ACTION_DIM = 1 # yaw_change_normalized
 TRAJECTORY_REWARD_DIM = 1
 
@@ -152,7 +152,7 @@ class WorldConfig(BaseModel):
     # --- Basic World Dynamics ---
     dt: float = Field(1.0, description="Time step")
     agent_speed: float = Field(2.5, description="Constant speed of the agent")
-    yaw_angle_range: Tuple[float, float] = Field((-math.pi / 8, math.pi / 8), description="Range of possible yaw angle changes per step [-max_change, max_change]")
+    yaw_angle_range: Tuple[float, float] = Field((-math.pi / 6, math.pi / 6), description="Range of possible yaw angle changes per step [-max_change, max_change]")
 
     # --- World Boundaries for Normalization ---
     world_x_bounds: Tuple[float, float] = Field((-150.0, 150.0), description="Min/Max X boundaries of the world for normalization")
@@ -176,7 +176,7 @@ class WorldConfig(BaseModel):
 
     # --- State Representation ---
     trajectory_length: int = Field(10, description="Number of steps (N) included in the trajectory state for fixed-history SAC/PPO-MLP. PPO-RNN uses full rollouts.")
-    trajectory_feature_dim: int = Field(CORE_STATE_DIM + CORE_ACTION_DIM + TRAJECTORY_REWARD_DIM, description="Dimension of features per step in trajectory state (basic_state + prev_action + prev_reward)") # 8+1+1=10
+    trajectory_feature_dim: int = Field(CORE_STATE_DIM + CORE_ACTION_DIM + TRAJECTORY_REWARD_DIM, description="Dimension of features per step in trajectory state (basic_state + prev_action + prev_reward)") # 9+1+1=11
 
     # --- Observations & Noise ---
     range_measurement_base_noise: float = Field(0.01, description="Base standard deviation of range measurement noise")
@@ -269,33 +269,133 @@ class DefaultConfig(BaseModel):
         elif self.algorithm.lower() == "ppo":
             self.training.models_dir = "models/ppo/"
 
+# --- Define Base Default Configurations ---
+default_config = DefaultConfig() # This is SAC MLP by default
 
-default_config = DefaultConfig()
+# --- Signal Variation Configs (based on default SAC MLP) ---
+default_config_poor_signal = default_config.model_copy(deep=True)
+default_config_poor_signal.world.range_measurement_base_noise = 0.05
+default_config_poor_signal.world.range_measurement_distance_factor = 0.005
+default_config_poor_signal.world.new_measurement_probability = 0.5
 
+default_config_good_signal = default_config.model_copy(deep=True)
+default_config_good_signal.world.range_measurement_base_noise = 0.002
+default_config_good_signal.world.range_measurement_distance_factor = 0.0002
+default_config_good_signal.world.new_measurement_probability = 0.95
+
+# --- Algorithm & Feature Specific Base Configs ---
 sac_rnn_config = DefaultConfig(algorithm="sac")
 sac_rnn_config.sac.use_rnn = True
 
-sac_per_config = DefaultConfig(algorithm="sac") 
+sac_per_config = default_config.model_copy(deep=True) # Based on SAC MLP
 sac_per_config.sac.use_per = True
 
-ppo_config_obj = DefaultConfig(algorithm="ppo")
+ppo_mlp_config = DefaultConfig(algorithm="ppo") # This is PPO MLP
+ppo_mlp_config.ppo.use_rnn = False # Ensure MLP
 
 ppo_rnn_config = DefaultConfig(algorithm="ppo") 
 ppo_rnn_config.ppo.use_rnn = True
-# For recurrent PPO, steps_per_update is essentially the rollout length.
-# batch_size for PPO is the number of such rollouts processed in one update.
-ppo_rnn_config.ppo.steps_per_update = 256 # Example: Shorter rollouts for RNN PPO
-ppo_rnn_config.ppo.batch_size = 16        # Example: 16 rollouts per update batch
+ppo_rnn_config.ppo.steps_per_update = 256 
+ppo_rnn_config.ppo.batch_size = 16        
 
-# Re-run post_init for all predefined configs to apply updates
-for cfg_instance in [default_config, sac_rnn_config, sac_per_config, ppo_config_obj, ppo_rnn_config]:
+# --- Initialize CONFIGS dictionary ---
+CONFIGS: Dict[str, DefaultConfig] = {
+    "default": default_config, # SAC MLP
+    "default_poor_signal": default_config_poor_signal, # SAC MLP, poor signal
+    "default_good_signal": default_config_good_signal, # SAC MLP, good signal
+    "sac_rnn": sac_rnn_config,
+    "sac_per": sac_per_config, # SAC MLP with PER
+    "ppo_mlp": ppo_mlp_config, # Renamed from ppo_config_obj for clarity
+    "ppo_rnn": ppo_rnn_config, 
+}
+
+# --- SAC MLP Hyperparameter Variations (based on `default_config`) ---
+sac_mlp_variations_list = [
+    ("actor_lr_low", "sac.actor_lr", 1e-5), ("actor_lr_high", "sac.actor_lr", 1e-4),
+    ("critic_lr_low", "sac.critic_lr", 1e-5), ("critic_lr_high", "sac.critic_lr", 1e-4),
+    ("gamma_low", "sac.gamma", 0.95), ("gamma_high", "sac.gamma", 0.995),
+    ("tau_low", "sac.tau", 0.001), ("tau_high", "sac.tau", 0.01),
+    ("hidden_dims_small", "sac.hidden_dims", [32, 32]),
+    ("hidden_dims_large", "sac.hidden_dims", [128, 128]),
+    ("alpha_low", "sac.alpha", 0.1), ("alpha_high", "sac.alpha", 0.5),
+]
+for name_suffix, param_path, value in sac_mlp_variations_list:
+    config_name = f"sac_mlp_{name_suffix}"
+    new_config = default_config.model_copy(deep=True) # Base is sac_mlp
+    new_config.algorithm = "sac" # Explicitly set
+    new_config.sac.use_rnn = False # Ensure MLP
+    parts = param_path.split(".")
+    attr_to_set = new_config
+    for part in parts[:-1]:
+        attr_to_set = getattr(attr_to_set, part)
+    setattr(attr_to_set, parts[-1], value)
+    CONFIGS[config_name] = new_config
+
+# --- PPO MLP Hyperparameter Variations (based on `ppo_mlp_config`) ---
+ppo_mlp_variations_list = [
+    ("actor_lr_low", "ppo.actor_lr", 1e-6), ("actor_lr_high", "ppo.actor_lr", 1e-5),
+    ("critic_lr_low", "ppo.critic_lr", 5e-4), ("critic_lr_high", "ppo.critic_lr", 5e-3),
+    ("gae_lambda_low", "ppo.gae_lambda", 0.90), ("gae_lambda_high", "ppo.gae_lambda", 0.98),
+    ("policy_clip_low", "ppo.policy_clip", 0.02), ("policy_clip_high", "ppo.policy_clip", 0.1),
+    ("entropy_coef_low", "ppo.entropy_coef", 0.005), ("entropy_coef_high", "ppo.entropy_coef", 0.05),
+    ("hidden_dim_small", "ppo.hidden_dim", 128), ("hidden_dim_large", "ppo.hidden_dim", 512),
+    ("n_epochs_low", "ppo.n_epochs", 2), ("n_epochs_high", "ppo.n_epochs", 5),
+]
+for name_suffix, param_path, value in ppo_mlp_variations_list:
+    config_name = f"ppo_mlp_{name_suffix}"
+    new_config = ppo_mlp_config.model_copy(deep=True) # Base is ppo_mlp
+    new_config.algorithm = "ppo" # Explicitly set
+    new_config.ppo.use_rnn = False # Ensure MLP
+    parts = param_path.split(".")
+    attr_to_set = new_config
+    for part in parts[:-1]:
+        attr_to_set = getattr(attr_to_set, part)
+    setattr(attr_to_set, parts[-1], value)
+    CONFIGS[config_name] = new_config
+
+# --- Re-run post_init for ALL configs to apply updates and sync dependent params ---
+config_instances_to_initialize = list(CONFIGS.values()) # Get all instances from the dict
+
+for cfg_instance in config_instances_to_initialize:
     cfg_instance.model_post_init(None)
 
 
-CONFIGS: Dict[str, DefaultConfig] = {
-    "default": default_config, 
-    "sac_rnn": sac_rnn_config,
-    "sac_per": sac_per_config, 
-    "ppo": ppo_config_obj,     
-    "ppo_rnn": ppo_rnn_config, 
-}
+# --- List of all defined configurations ---
+# Base Configurations:
+# "default": DefaultConfig() - SAC MLP with standard signal
+# "default_poor_signal": DefaultConfig() - SAC MLP with poor signal/high noise
+# "default_good_signal": DefaultConfig() - SAC MLP with good signal/low noise
+# "sac_rnn": DefaultConfig(algorithm="sac", sac.use_rnn=True)
+# "sac_per": DefaultConfig(sac.use_per=True) - SAC MLP with Prioritized Experience Replay
+# "ppo_mlp": DefaultConfig(algorithm="ppo", ppo.use_rnn=False)
+# "ppo_rnn": DefaultConfig(algorithm="ppo", ppo.use_rnn=True, ppo.steps_per_update=256, ppo.batch_size=16)
+#
+# SAC MLP Hyperparameter Variations (based on "default"):
+# "sac_mlp_actor_lr_low"
+# "sac_mlp_actor_lr_high"
+# "sac_mlp_critic_lr_low"
+# "sac_mlp_critic_lr_high"
+# "sac_mlp_gamma_low"
+# "sac_mlp_gamma_high"
+# "sac_mlp_tau_low"
+# "sac_mlp_tau_high"
+# "sac_mlp_hidden_dims_small"
+# "sac_mlp_hidden_dims_large"
+# "sac_mlp_alpha_low"
+# "sac_mlp_alpha_high"
+#
+# PPO MLP Hyperparameter Variations (based on "ppo_mlp"):
+# "ppo_mlp_actor_lr_low"
+# "ppo_mlp_actor_lr_high"
+# "ppo_mlp_critic_lr_low"
+# "ppo_mlp_critic_lr_high"
+# "ppo_mlp_gae_lambda_low"
+# "ppo_mlp_gae_lambda_high"
+# "ppo_mlp_policy_clip_low"
+# "ppo_mlp_policy_clip_high"
+# "ppo_mlp_entropy_coef_low"
+# "ppo_mlp_entropy_coef_high"
+# "ppo_mlp_hidden_dim_small"
+# "ppo_mlp_hidden_dim_large"
+# "ppo_mlp_n_epochs_low"
+# "ppo_mlp_n_epochs_high"

@@ -1,0 +1,19 @@
+#!/bin/bash
+#SBATCH --job-name=dl-ppo-mlp-hidden-dim-large
+#SBATCH --account=nct328
+#SBATCH --qos=acc_training
+#SBATCH --time=01-00:00:00
+#SBATCH --cpus-per-task=20
+#SBATCH --gres=gpu:1
+#SBATCH --chdir=/home/nct/nct01026/ATCI-P1/
+#SBATCH --output=/home/nct/nct01026/ATCI-P1/out_logs/ppo-mlp-hidden-dim-large/job_output.log
+#SBATCH --error=/home/nct/nct01026/ATCI-P1/out_logs/ppo-mlp-hidden-dim-large/job_error.log
+
+module purge
+module load impi intel hdf5 mkl python/3.12.1-gcc
+# Ensure your Python environment (e.g., virtual environment) with PyTorch, Pydantic, etc.
+# is activated here if not part of the loaded Python module.
+# Example: source /path/to/your/venv/bin/activate
+
+cd ~/ATCI-P1/  # Redundant if --chdir is effective, but harmless
+python src/bsc_main.py -c ppo_mlp_hidden_dim_large
